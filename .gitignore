@@ -1,0 +1,21 @@
+node_modules
+coverage
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Dados e segredos locais
+data/
+db.json
+public_res.json
+public_response.json
+tail.txt
+*.zip
+metadata.json
+
+# Builds
+dist/
+uploads/
+dev-server.*
+dev-tools/

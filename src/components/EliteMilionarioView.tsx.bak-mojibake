@@ -1,0 +1,166 @@
+﻿import React, { useState } from "react";
+import { ArrowRight, Crown } from "lucide-react";
+import QueroFazerParteModal from "./QueroFazerParteModal";
+
+import heroBannerImg from "../assets/images/elite_milionaria_hero_1786195042546.jpg";
+import mindsetImg from "../assets/images/elite_mindset_growth_1786195055764.jpg";
+import empireImg from "../assets/images/elite_empire_building_1786195067603.jpg";
+
+export default function EliteMilionarioView() {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  return (
+    <div id="elite-milionario-view" className="space-y-12 sm:space-y-16 pb-16 animate-fade-in">
+      {/* 1. Top Horizontal Banner Image matching Grupo FÃªnix style */}
+      <section className="-mt-6 sm:-mt-8 lg:-mt-10 -mx-4 sm:-mx-6 lg:-mx-10 relative overflow-hidden bg-[#07090e]">
+        <div className="relative w-full aspect-[21/9] min-h-[330px] sm:min-h-[450px] md:min-h-[550px] max-h-[750px]">
+          <img loading="lazy" decoding="async"
+            src={heroBannerImg}
+            alt="Elite MilionÃ¡ria Banner"
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover object-center"
+          />
+          {/* Dark gradient overlay at the bottom seamlessly blending with page background */}
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-transparent to-black/40 pointer-events-none" />
+
+          {/* Banner Title Badge Overlay */}
+          <div className="absolute bottom-6 left-6 sm:bottom-10 sm:left-10 lg:left-16 z-10 max-w-2xl space-y-2">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-mono font-bold tracking-widest uppercase backdrop-blur-md">
+              <span>Elite MilionÃ¡ria â€¢ Grupo FÃªnix</span>
+            </div>
+            <h1 className="text-3xl sm:text-5xl lg:text-6xl font-black text-white font-display tracking-tight drop-shadow-lg">
+              Construa o Seu <span className="bg-gradient-to-r from-amber-200 via-amber-400 to-amber-500 bg-clip-text text-transparent">ImpÃ©rio</span>
+            </h1>
+          </div>
+        </div>
+      </section>
+
+      {/* 2. Main Content Container */}
+      <section className="space-y-12 sm:space-y-16 max-w-5xl mx-auto pt-4">
+
+        {/* Hero Paragraph 1 */}
+        <div className="relative rounded-3xl p-8 sm:p-10 bg-gradient-to-br from-[#131924] via-[#0d1218] to-[#080b0f] border border-amber-500/30 shadow-2xl overflow-hidden">
+          <div className="absolute -top-24 -right-24 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="space-y-4">
+            <span className="text-xs font-bold tracking-[0.2em] text-amber-400 uppercase block">
+              A Verdade Sobre o Sucesso
+            </span>
+            <p className="text-lg sm:text-2xl font-bold text-white leading-relaxed font-display">
+              VocÃª nÃ£o vai ficar rico economizando. O que realmente te separa de um faturamento de <span className="text-gold-metallic">R$ 1.000.000,00 por ano</span> nÃ£o Ã© a crise, nÃ£o Ã© o mercado e muito menos a sorte. Ã‰ a sua insistÃªncia em permanecer na zona de conforto.
+            </p>
+          </div>
+        </div>
+
+        {/* Paragraph 2 - Method & Structure Callout */}
+        <div className="grid md:grid-cols-12 gap-8 items-center">
+          <div className="md:col-span-12 card-modern rounded-3xl p-8 sm:p-10 bg-[#0f141c]/90 border border-white/10 space-y-6 shadow-xl">
+            <h2 className="text-xl sm:text-2xl font-extrabold text-white font-display">
+              MÃ©todo Testado e Aprovado!
+            </h2>
+            <p className="text-base sm:text-lg text-slate-300 leading-relaxed">
+              Todo mundo sonha em ser milionÃ¡rio, mas quase ninguÃ©m tem a coragem de fazer o que Ã© necessÃ¡rio para chegar lÃ¡. NÃ³s nÃ£o vendemos ilusÃµes e nÃ£o acreditamos em fÃ³rmulas mÃ¡gicas. NÃ³s entregamos a estrutura, o mÃ©todo e a cobranÃ§a implacÃ¡vel necessÃ¡ria para transformar empreendedores comuns em feras de mercado. A nossa meta Ã© fria e calculada: <strong className="text-white font-semibold">fazer vocÃª faturar sete dÃ­gitos por ano.</strong>
+            </p>
+          </div>
+        </div>
+
+        {/* First Middle Image */}
+        <div className="relative rounded-3xl overflow-hidden border border-amber-500/30 shadow-2xl group">
+          <img loading="lazy" decoding="async"
+            src={mindsetImg}
+            alt="EstratÃ©gia e Alta Performance Elite MilionÃ¡ria"
+            referrerPolicy="no-referrer"
+            className="w-full h-[280px] sm:h-[400px] md:h-[480px] object-cover transition-transform duration-700 group-hover:scale-105"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-black/20 to-transparent" />
+          <div className="absolute bottom-6 left-6 right-6 sm:bottom-8 sm:left-8 sm:right-8 bg-[#0d1218]/80 backdrop-blur-md p-4 sm:p-6 rounded-2xl border border-white/10">
+            <p className="text-xs sm:text-sm font-semibold text-amber-300">
+              Ambiente de alta performance, estratÃ©gia de negÃ³cios e acompanhamento contÃ­nuo.
+            </p>
+          </div>
+        </div>
+
+        {/* Paragraph 3 - O SalÃ£o dos Determinados */}
+        <div className="card-modern rounded-3xl p-8 sm:p-10 bg-gradient-to-r from-[#0d1218] via-[#111722] to-[#0d1218] border border-white/10 space-y-4 shadow-xl">
+          <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
+            A Elite MilionÃ¡ria do Grupo FÃªnix nÃ£o Ã© um clube de sortudos. Ã‰ o salÃ£o daqueles que decidiram que a mediocridade nÃ£o era uma opÃ§Ã£o. SÃ£o pessoas que estavam exatamente no seu lugar, com as mesmas dÃºvidas e os mesmos medos, mas que cruzaram a linha e construÃ­ram um impÃ©rio. Eles nÃ£o tinham superpoderes, apenas a determinaÃ§Ã£o de nÃ£o aceitar um destino ordinÃ¡rio.
+          </p>
+        </div>
+
+        {/* Paragraph 4 & 5 - AmbiÃ§Ã£o x Medo & Ã‰ possÃ­vel */}
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="card-modern rounded-3xl p-8 bg-[#0f141c]/90 border border-white/10 space-y-4 flex flex-col justify-between shadow-lg">
+            <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
+              VocÃª ainda acha que ser milionÃ¡rio nÃ£o Ã© para vocÃª? Ã“timo. Continue acreditando nisso e continue ganhando o mesmo salÃ¡rio atÃ© o fim da vida. Mas, se a sua ambiÃ§Ã£o grita mais alto que o seu medo e a leitura disso deu um nÃ³ no seu estÃ´mago, Ã© porque vocÃª sabe que veio ao mundo para algo maior.
+            </p>
+          </div>
+
+          <div className="card-modern rounded-3xl p-8 bg-gradient-to-br from-[#1a140b] via-[#0d1218] to-[#120a07] border border-amber-500/40 space-y-4 flex flex-col justify-center text-center shadow-xl">
+            <h3 className="text-2xl sm:text-3xl font-black text-amber-300 font-display">
+              Ã‰ possÃ­vel. Ã‰ real.
+            </h3>
+            <p className="text-base sm:text-lg text-slate-200 font-medium leading-relaxed">
+              E estÃ¡ acontecendo todos os dias com gente igual a vocÃª.
+            </p>
+          </div>
+        </div>
+
+        {/* Second Middle Image */}
+        <div className="relative rounded-3xl overflow-hidden border border-amber-500/30 shadow-2xl group">
+          <img loading="lazy" decoding="async"
+            src={empireImg}
+            alt="ConstruÃ§Ã£o de ImpÃ©rio Elite MilionÃ¡ria"
+            referrerPolicy="no-referrer"
+            className="w-full h-[280px] sm:h-[400px] md:h-[480px] object-cover transition-transform duration-700 group-hover:scale-105"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-black/20 to-transparent" />
+          <div className="absolute bottom-6 left-6 right-6 sm:bottom-8 sm:left-8 sm:right-8 bg-[#0d1218]/80 backdrop-blur-md p-4 sm:p-6 rounded-2xl border border-white/10">
+            <p className="text-xs sm:text-sm font-semibold text-amber-300">
+              O destino Ã© construÃ­do por decisÃµes corajosas tomadas no presente.
+            </p>
+          </div>
+        </div>
+
+        {/* Paragraph 6 & 7 - O Chamado & Pare de Adiar */}
+        <div className="card-modern rounded-3xl p-8 sm:p-12 border border-amber-500/30 bg-gradient-to-b from-[#141a24] via-[#0e131b] to-[#080b0f] space-y-8 shadow-2xl">
+          <div className="space-y-6">
+            <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
+              O Grupo FÃªnix nÃ£o estÃ¡ atrÃ¡s de curiosos. Estamos caÃ§ando quem estÃ¡ disposto a sacrificar o que Ã© hoje para se tornar quem precisa ser amanhÃ£. A prÃ³xima vaga na Elite MilionÃ¡ria tem o seu nome escrito, mas ela nÃ£o serÃ¡ entregue de bandeja. Ela serÃ¡ conquistada por quem der o primeiro passo agora.
+            </p>
+
+            <div className="p-6 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+              <p className="text-lg sm:text-xl font-bold text-amber-200 leading-relaxed font-display">
+                Pare de adiar a vida que vocÃª merece. O amanhÃ£ Ã© a desculpa favorita dos fracassados. DÃª o sinal de partida, entre em contato com a nossa equipe e venha provar do que vocÃª realmente Ã© capaz. A Elite estÃ¡ de portas abertas, mas apenas para quem tiver a ousadia de entrar.
+              </p>
+            </div>
+          </div>
+
+          {/* Final Call to Action Button */}
+          <div className="pt-4 text-center">
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="btn-gold-metallic px-8 sm:px-12 py-5 rounded-2xl text-base sm:text-lg font-black tracking-wide cursor-pointer shadow-2xl inline-flex items-center justify-center gap-3 hover:scale-105 transition-all duration-300"
+            >
+              <Crown className="w-6 h-6 text-[#0b0f14]" />
+              <span>FAZER PARTE DA ELITE MILIONÃRIA</span>
+              <ArrowRight className="w-5 h-5 text-[#0b0f14]" />
+            </button>
+            <p className="text-xs text-slate-400 mt-3 font-medium">
+              Clique para preencher o formulÃ¡rio e enviar sua mensagem para nossa equipe.
+            </p>
+          </div>
+        </div>
+
+      </section>
+
+      {/* Modal with form routed to recruitment / team email */}
+      <QueroFazerParteModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title="Fazer Parte da Elite MilionÃ¡ria"
+        subtitle="Preencha seus dados para enviar sua mensagem diretamente para a equipe responsÃ¡vel pela contrataÃ§Ã£o e seleÃ§Ã£o da Elite MilionÃ¡ria."
+        tipoParceria="Elite MilionÃ¡ria - Candidatura de Equipe"
+      />
+    </div>
+  );
+}
+

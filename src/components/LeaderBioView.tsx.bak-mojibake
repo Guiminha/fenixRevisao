@@ -1,0 +1,303 @@
+﻿import React, { useEffect, useState } from "react";
+import Reveal from "./Reveal";
+import { useStore } from "../store";
+import QueroFazerParteModal from "./QueroFazerParteModal";
+import { 
+  MapPin, 
+  Calendar, 
+  TrendingUp, 
+  Award, 
+  Flame, 
+  Target, 
+  Quote,
+  CheckCircle2,
+  HelpCircle,
+  ShieldCheck,
+  Sun,
+  Moon,
+  Rocket,
+  UserPlus
+} from "lucide-react";
+
+export default function LeaderBioView() {
+  const { publicData, fetchPublicData } = useStore();
+  const [isQueroFazerParteOpen, setIsQueroFazerParteOpen] = useState(false);
+
+  useEffect(() => {
+    fetchPublicData();
+  }, []);
+
+  if (!publicData) {
+    return (
+      <div className="space-y-12 py-8 animate-pulse">
+        <div className="grid lg:grid-cols-[440px_1fr] md:grid-cols-[380px_1fr] gap-10">
+          <div className="aspect-[9/16] w-full bg-[#0f131a] rounded-3xl border border-white/[0.03]"></div>
+          <div className="space-y-6">
+            <div className="h-4 w-24 bg-[#0f131a] rounded border border-white/[0.02]"></div>
+            <div className="h-10 w-64 bg-[#0f131a] rounded border border-white/[0.02]"></div>
+            <div className="h-6 w-48 bg-[#0f131a] rounded border border-white/[0.02]"></div>
+            <div className="h-32 bg-[#0f131a] rounded-2xl border border-white/[0.02]"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const { leaderBio } = publicData;
+
+  const faqs = [
+    {
+      q: "Preciso de experiÃªncia prÃ©via?",
+      a: "NÃ£o. Nossa estrutura de mentoria e a plataforma EAD entregam toda a formaÃ§Ã£o necessÃ¡ria, do bÃ¡sico ao avanÃ§ado."
+    },
+    {
+      q: "Preciso de CNPJ para comeÃ§ar?",
+      a: "NÃ£o. VocÃª inicia como Consultor Pessoa FÃ­sica. O CNPJ sÃ³ Ã© necessÃ¡rio se quiser evoluir para o modelo de Distribuidor com loja virtual."
+    },
+    {
+      q: "E se eu quiser formar equipe?",
+      a: "Pode. Nosso modelo recompensa quem desenvolve lÃ­deres. Quanto mais vocÃª apoia e capacita sua rede, maiores sÃ£o suas bonificaÃ§Ãµes."
+    },
+    {
+      q: "Qual o investimento inicial?",
+      a: "AcessÃ­vel. Com poucos pontos de venda vocÃª jÃ¡ tem acesso a descontos, produtos e comeÃ§a a evoluir no plano de carreira."
+    },
+    {
+      q: "Meu cadastro tem validade?",
+      a: "Ã‰ vitalÃ­cio. Para manter comissionamentos e benefÃ­cios ativos, basta cumprir a movimentaÃ§Ã£o mÃ­nima mensal do plano de carreira."
+    },
+    {
+      q: "Posso trabalhar de qualquer lugar?",
+      a: "Sim. Sem loja fÃ­sica e com logÃ­stica integrada, vocÃª opera de onde estiver. Flexibilidade geogrÃ¡fica e de horÃ¡rios Ã© um dos pilares do modelo."
+    }
+  ];
+
+  return (
+    <div id="leader-bio-view" className="space-y-16 pb-16 animate-fade-in">
+      {/* 1. Full-width Top Horizontal Banner Image with Bottom Gradient */}
+      <section className="-mt-6 sm:-mt-8 lg:-mt-10 -mx-4 sm:-mx-6 lg:-mx-10 relative overflow-hidden bg-[#07090e]">
+        {leaderBio.foto ? (
+          <div className="relative w-full aspect-[21/9] min-h-[330px] sm:min-h-[450px] md:min-h-[550px] max-h-[750px]">
+            <img loading="lazy" decoding="async"
+              src={leaderBio.foto}
+              alt="Banner Grupo FÃªnix"
+              referrerPolicy="no-referrer"
+              className="w-full h-full object-cover object-top"
+            />
+            <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent pointer-events-none" />
+          </div>
+        ) : (
+          <div className="relative w-full h-44 sm:h-56 bg-gradient-to-br from-[#121721] via-[#0f131a] to-[#07090e] border-b border-white/5 flex flex-col items-center justify-center p-6 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-[#d12a62]/10 border border-[#d12a62]/20 flex items-center justify-center text-[#ff719e] mb-2">
+              <Sun className="w-6 h-6 text-[#ff719e]" />
+            </div>
+            <h2 className="text-xl font-bold text-white mb-1">Grupo FÃªnix</h2>
+            <p className="text-xs text-[#8a96a3] max-w-md">
+              Estrutura de apresentaÃ§Ã£o pronta. Cadastre fotos e informaÃ§Ãµes no Painel Administrativo.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* 2. Empreenda com o Grupo Fenix */}
+      <section className="space-y-16 max-w-5xl mx-auto pt-8 border-t border-white/[0.04]">
+        
+        {/* Header Title */}
+        <Reveal direction="up" className="text-center space-y-3">
+          <span className="text-[11px] font-bold tracking-[0.25em] text-[#d12a62] uppercase block">
+            Oportunidade de NegÃ³cio
+          </span>
+          <h2 className="text-3xl md:text-5xl font-extrabold font-display text-white tracking-tight">
+            Empreenda com o Grupo Fenix
+          </h2>
+          <p className="text-lg md:text-xl text-gold-metallic font-semibold tracking-tight font-display max-w-2xl mx-auto">
+            Liberdade financeira com tecnologia de ponta
+          </p>
+        </Reveal>
+
+        {/* Intro cards / narrative */}
+        <div className="grid md:grid-cols-2 gap-8">
+          <div className="card-modern rounded-3xl p-6 md:p-8 space-y-4 bg-gradient-to-br from-[#0f131a]/80 to-[#07090e]/80 border border-white/10 shadow-xl">
+            <div className="w-12 h-12 rounded-2xl bg-[#d12a62]/10 border border-[#d12a62]/20 flex items-center justify-center text-[#d12a62]">
+              <Rocket className="w-6 h-6" />
+            </div>
+            <p className="text-sm md:text-base text-slate-300 leading-relaxed">
+              Imagine construir um negÃ³cio prÃ³prio sem os custos e riscos de uma operaÃ§Ã£o tradicional. Sem aluguel, sem estoque parado, sem equipe fixa. Apenas vocÃª, produtos de tecnologia comprovada e um sistema de suporte que te acompanha em cada etapa.
+            </p>
+            <p className="text-sm md:text-base text-slate-300 leading-relaxed font-medium text-white">
+              Ã‰ isso que o Grupo Fenix oferece: um caminho real de empreendedorismo no mercado de biohacking e bem-estar integrativo, um dos segmentos que mais cresce no mundo.
+            </p>
+          </div>
+
+          <div className="card-modern rounded-3xl p-6 md:p-8 space-y-4 bg-gradient-to-br from-[#0f131a]/80 to-[#07090e]/80 border border-white/10 shadow-xl">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+            <h3 className="text-xl font-bold text-white font-display">
+              Um modelo que funciona e jÃ¡ estÃ¡ validado
+            </h3>
+            <p className="text-sm md:text-base text-slate-300 leading-relaxed">
+              HÃ¡ mais de 30 anos, milhares de pessoas transformaram suas vidas com esse sistema. Hoje, somos uma rede presente em mais de 10 paÃ­ses, com um ecossistema completo de treinamento e capacitaÃ§Ã£o que entrega resultados concretos.
+            </p>
+            <p className="text-sm md:text-base text-amber-200/90 leading-relaxed font-semibold">
+              Nosso DNA Ã© o empreendedorismo de propÃ³sito: gerar renda enquanto impactamos positivamente a vida das pessoas. Mais do que vender, formamos lÃ­deres.
+            </p>
+          </div>
+        </div>
+
+        {/* O que vocÃª tem ao seu lado */}
+        <div className="card-modern rounded-3xl p-6 md:p-10 border border-white/10 bg-gradient-to-r from-slate-900/90 via-[#0a0d14] to-slate-900/90 shadow-2xl space-y-8">
+          <div className="text-center space-y-2">
+            <span className="text-xs font-bold tracking-widest text-[#d12a62] uppercase block">Suporte Completo</span>
+            <h3 className="text-2xl md:text-3xl font-bold text-white font-display">O que vocÃª tem ao seu lado</h3>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="flex items-start gap-3 p-4 rounded-2xl bg-white/[0.03] border border-white/5">
+              <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
+              <span className="text-sm text-slate-200">Produtos exclusivos com tecnologia bioenergÃ©tica de altÃ­ssima performance</span>
+            </div>
+            <div className="flex items-start gap-3 p-4 rounded-2xl bg-white/[0.03] border border-white/5">
+              <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
+              <span className="text-sm text-slate-200">Plano de carreira claro, cada meta alcanÃ§ada abre novas graduaÃ§Ãµes e ganhos</span>
+            </div>
+            <div className="flex items-start gap-3 p-4 rounded-2xl bg-white/[0.03] border border-white/5">
+              <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
+              <span className="text-sm text-slate-200">Eventos presenciais para imersÃ£o e networking</span>
+            </div>
+            <div className="flex items-start gap-3 p-4 rounded-2xl bg-white/[0.03] border border-white/5">
+              <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
+              <span className="text-sm text-slate-200">Comunidade engajada que cresce junto</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Por que esse modelo Ã© diferente? */}
+        <div className="space-y-6">
+          <div className="text-center space-y-2">
+            <span className="text-xs font-bold tracking-widest text-amber-400 uppercase block">Diferenciais</span>
+            <h3 className="text-2xl md:text-3xl font-bold text-white font-display">Por que esse modelo Ã© diferente?</h3>
+            <p className="text-sm text-slate-400 max-w-2xl mx-auto">
+              Elegemos trabalhar com um sistema que une trÃªs elementos difÃ­ceis de encontrar juntos:
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="p-6 rounded-2xl bg-slate-900/60 border border-white/10 space-y-2 hover:border-[#d12a62]/30 transition-all">
+              <div className="w-10 h-10 rounded-xl bg-[#d12a62]/10 text-[#d12a62] flex items-center justify-center font-bold text-lg mb-4">1</div>
+              <h4 className="text-base font-bold text-white">Baixo Risco</h4>
+              <p className="text-xs md:text-sm text-slate-300">Investimento inicial acessÃ­vel, sem os altos custos fixos de negÃ³cios tradicionais.</p>
+            </div>
+            <div className="p-6 rounded-2xl bg-slate-900/60 border border-white/10 space-y-2 hover:border-amber-500/30 transition-all">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold text-lg mb-4">2</div>
+              <h4 className="text-base font-bold text-white">Alta Rentabilidade</h4>
+              <p className="text-xs md:text-sm text-slate-300">Margens atrativas e mÃºltiplas fontes de renda escalÃ¡veis.</p>
+            </div>
+            <div className="p-6 rounded-2xl bg-slate-900/60 border border-white/10 space-y-2 hover:border-cyan-500/30 transition-all">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center font-bold text-lg mb-4">3</div>
+              <h4 className="text-base font-bold text-white">Liberdade Total</h4>
+              <p className="text-xs md:text-sm text-slate-300">VocÃª decide onde, quando e como trabalhar, com total flexibilidade.</p>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 text-center text-sm text-slate-300">
+            NÃ£o hÃ¡ franquia para pagar, nem metas impossÃ­veis. O crescimento Ã© sustentÃ¡vel e o reconhecimento vem do seu esforÃ§o real.
+          </div>
+        </div>
+
+        {/* Produtos que transformam */}
+        <div className="space-y-8">
+          <div className="text-center space-y-2">
+            <span className="text-xs font-bold tracking-widest text-[#d12a62] uppercase block">Tecnologia Aplicada</span>
+            <h3 className="text-2xl md:text-3xl font-bold text-white font-display">Produtos que transformam</h3>
+            <p className="text-sm text-slate-400 max-w-2xl mx-auto">
+              Dispomos de duas frentes de soluÃ§Ãµes que atendem diferentes momentos do dia:
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Dia */}
+            <div className="rounded-3xl border border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent p-6 md:p-8 space-y-4">
+              <div className="flex items-center gap-3 text-amber-400">
+                <Sun className="w-6 h-6" />
+                <h4 className="text-lg font-bold text-white font-display">Para o movimento e a energia do dia</h4>
+              </div>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Braceletes, faixas, patches e squeeze alcalinizado. Tecnologia que acompanha sua rotina, trazendo equilÃ­brio, performance e hidrataÃ§Ã£o terapÃªutica onde vocÃª estiver.
+              </p>
+            </div>
+
+            {/* Noite */}
+            <div className="rounded-3xl border border-indigo-500/20 bg-gradient-to-b from-indigo-500/5 to-transparent p-6 md:p-8 space-y-4">
+              <div className="flex items-center gap-3 text-indigo-400">
+                <Moon className="w-6 h-6" />
+                <h4 className="text-lg font-bold text-white font-display">Para o descanso e a regeneraÃ§Ã£o</h4>
+              </div>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Palmilhas bioenergÃ©ticas, travesseiros com tecnologia FIR e aparelho reparador do sono. SoluÃ§Ãµes que cuidam do seu corpo enquanto vocÃª dorme, respeitando o ritmo natural da sua biologia.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-5 rounded-2xl bg-slate-900/80 border border-white/10 text-center text-xs md:text-sm text-slate-300 space-y-1">
+            <span className="text-gold-metallic font-semibold block">Tecnologia Global Exclusiva</span>
+            Tudo com a tecnologia Nipponflex, referÃªncia mundial desenvolvida pelo Dr. Toshio Komuro, com patentes registradas em mais de 40 paÃ­ses.
+          </div>
+        </div>
+
+        {/* DÃºvidas frequentes */}
+        <div className="space-y-6">
+          <div className="text-center space-y-2">
+            <span className="text-xs font-bold tracking-widest text-[#d12a62] uppercase block">FAQ</span>
+            <h3 className="text-2xl md:text-3xl font-bold text-white font-display">DÃºvidas frequentes</h3>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            {faqs.map((faq, idx) => (
+              <div key={idx} className="p-5 rounded-2xl bg-slate-900/60 border border-white/10 space-y-2">
+                <h4 className="text-sm md:text-base font-bold text-white flex items-start gap-2">
+                  <HelpCircle className="w-4 h-4 text-[#d12a62] shrink-0 mt-1" />
+                  <span>{faq.q}</span>
+                </h4>
+                <p className="text-xs md:text-sm text-slate-300 leading-relaxed pl-6">
+                  {faq.a}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Sua jornada comeÃ§a agora */}
+        <div className="card-modern rounded-3xl p-8 md:p-12 border border-[#d12a62]/30 bg-gradient-to-r from-[#d12a62]/10 via-[#0f131a] to-amber-500/10 text-center space-y-6 shadow-2xl">
+          <div className="space-y-2 max-w-2xl mx-auto">
+            <h3 className="text-2xl md:text-4xl font-extrabold text-white font-display">
+              Sua jornada comeÃ§a agora
+            </h3>
+            <p className="text-base md:text-lg text-amber-300 font-medium">
+              NÃ£o existe momento perfeito. Existe o momento em que vocÃª decide agir.
+            </p>
+            <p className="text-sm md:text-base text-slate-300 leading-relaxed">
+              Se vocÃª busca liberdade, propÃ³sito e um negÃ³cio com impacto real, o Grupo Fenix Ã© o lugar certo para comeÃ§ar.
+            </p>
+          </div>
+
+          <button
+            onClick={() => setIsQueroFazerParteOpen(true)}
+            className="btn-gold-metallic px-8 py-4 rounded-xl text-sm font-bold cursor-pointer shadow-xl inline-flex items-center gap-2 hover:scale-[1.02] transition-transform"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Quero fazer parte!</span>
+          </button>
+        </div>
+
+      </section>
+
+      {/* Modal Quero Fazer Parte */}
+      <QueroFazerParteModal 
+        isOpen={isQueroFazerParteOpen}
+        onClose={() => setIsQueroFazerParteOpen(false)}
+      />
+    </div>
+  );
+}
+
+

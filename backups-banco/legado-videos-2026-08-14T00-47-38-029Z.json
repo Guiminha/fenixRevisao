@@ -1,0 +1,119 @@
+{
+  "criadoEm": "2026-08-14T00:47:38.030Z",
+  "origem": "limpar-videos-legados",
+  "cursos": [
+    {
+      "id": "c-1786587892468",
+      "titulo": "Treinamento de Teste",
+      "descricao": "bla bla bla bla",
+      "categoria": "Séries",
+      "nivel": "Intermediário",
+      "imagem": "/api/minio/preview/cursos%2Fcapas%2F1786587831871_63f61b35_jarra.png",
+      "duracao": "1 Episódio",
+      "modulos": [
+        {
+          "id": "m-temp-1",
+          "aulas": [
+            {
+              "id": "a-temp-1-1",
+              "titulo": "Treinamento de Teste",
+              "duracao": "Auto",
+              "videoUrl": "https://vimeo.com/367756121",
+              "tipoVideo": "vimeo"
+            }
+          ],
+          "titulo": "Episódio"
+        }
+      ],
+      "professor_nome": "Daniel Bolonhese",
+      "professor_especialidade": "Treinador",
+      "professor_bio": "Treinador",
+      "professor_foto": "/api/minio/preview/professores%2F1786587837409_d98a4120_channels4_profile_jpg",
+      "created_at": "2026-08-13 02:24:32.090113+00"
+    },
+    {
+      "id": "c-1785856845570",
+      "titulo": "Treinamento em Vendas",
+      "descricao": "Treinamento de Otimização em Vendas.",
+      "categoria": "Vendas",
+      "nivel": "Iniciante",
+      "imagem": "/api/minio/preview/cursos%2Fcapas%2F1786243707578_convencao_anual_grupo_fenix.jpg",
+      "duracao": "4 Aulas",
+      "modulos": [
+        {
+          "id": "m-temp-1",
+          "aulas": [],
+          "titulo": "Módulo 1: Introdução"
+        }
+      ],
+      "professor_nome": "",
+      "professor_especialidade": "",
+      "professor_bio": "",
+      "professor_foto": "",
+      "created_at": "2026-08-09T02:32:49.924Z"
+    },
+    {
+      "id": "c-1785940967033",
+      "titulo": "Estrategias de Apresentação e Fechamento de Vendas",
+      "descricao": "Otimize suas apresentaçoes e aumente suas vendas",
+      "categoria": "Vendas",
+      "nivel": "Iniciante",
+      "imagem": "/api/minio/preview/cursos%2Fcapas%2F1786243705397_apresentacao_e_vendas_capa.jpg",
+      "duracao": "5 Aulas",
+      "modulos": [
+        {
+          "id": "m-temp-1",
+          "aulas": [
+            {
+              "id": "a-temp-1-1",
+              "titulo": "Aula 1: Comece por aqui",
+              "duracao": "10:15",
+              "videoUrl": "https://youtu.be/AWpKJ8LVF-k?si=WS9mbyv4PDYb2jfq",
+              "tipoVideo": "youtube"
+            },
+            {
+              "id": "a-temp-1785940781400-8q6g",
+              "titulo": "Aula 2: Caracteristicas do produto",
+              "duracao": "Auto",
+              "videoUrl": "https://youtu.be/E7gOEEFH2U0?si=hfA_lXXUyyB0VW8M",
+              "tipoVideo": "youtube"
+            },
+            {
+              "id": "a-temp-1785940832205-911p",
+              "titulo": "Aula 3: APresentação da Pasta",
+              "duracao": "Auto",
+              "videoUrl": "https://youtu.be/cVNc6XZzF9c?si=a9GjtBa90C80ryMk",
+              "tipoVideo": "youtube"
+            }
+          ],
+          "titulo": "Módulo 1: Introdução"
+        },
+        {
+          "id": "m-temp-1785940867468",
+          "aulas": [
+            {
+              "id": "a-temp-1785940896554-f3i2",
+              "titulo": "Aula 1: Trabalhar sem Consultor",
+              "duracao": "Auto",
+              "videoUrl": "https://youtu.be/tdTKUdk_cjI?si=4PdtBIMmz5-UYxfy",
+              "tipoVideo": "youtube"
+            },
+            {
+              "id": "a-temp-1785940932914-v2rp",
+              "titulo": "Aula 2: Trabalhe 4 dias por Semana",
+              "duracao": "Auto",
+              "videoUrl": "https://youtu.be/y3q5L4Fn6i0?si=VwqKKjooBu6pcblB",
+              "tipoVideo": "youtube"
+            }
+          ],
+          "titulo": "Módulo 2: Apresentação nas Visistas"
+        }
+      ],
+      "professor_nome": "",
+      "professor_especialidade": "",
+      "professor_bio": "",
+      "professor_foto": "",
+      "created_at": "2026-08-09T02:32:49.925Z"
+    }
+  ]
+}
