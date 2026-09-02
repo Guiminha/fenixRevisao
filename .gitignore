@@ -16,6 +16,11 @@ metadata.json
 
 # Builds
 dist/
-uploads/
 dev-server.*
 dev-tools/
+
+# Uploads temporários (armazenamento local enquanto o MinIO está desligado).
+# A pasta uploads/ é versionada para o deploy via git push, mas estas partes não:
+uploads/suporte-anexos/
+uploads/cursos/
+uploads/Restaurar upload MinIo.md
