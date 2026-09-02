@@ -131,22 +131,22 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", pre
             <div className="absolute bottom-0 left-0 -mb-12 -ml-12 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl pointer-events-none" />
             <div className="relative z-10 space-y-6">
               {campos.badge && (
-                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#d12a62]/15 border border-[#d12a62]/30 text-[#e63973] text-xs font-semibold tracking-wider uppercase animate-fade-in-up">
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#d12a62]/15 border border-[#d12a62]/30 text-[#e63973] text-[clamp(0.625rem,0.8vw,0.875rem)] font-semibold tracking-wider uppercase animate-fade-in-up">
                   <Award className="w-4 h-4" />
                   <span>{campos.badge}</span>
                 </div>
               )}
-              <h1 className="text-3xl sm:text-5xl font-extrabold tracking-tight text-white font-display leading-tight">
+              <h1 className="text-[clamp(1.75rem,3.5vw,5rem)] font-extrabold tracking-tight text-white font-display leading-tight">
                 {campos.titulo}
                 {campos.tituloDestaque && (
                   <span className="bg-gradient-to-r from-white via-slate-200 to-[#e63973] bg-clip-text text-transparent">{campos.tituloDestaque}</span>
                 )}
               </h1>
               {textos[0] && (
-                <p className="text-base sm:text-lg text-slate-300 leading-relaxed max-w-3xl font-light">{textos[0]}</p>
+                <p className="text-[clamp(0.875rem,1.4vw,1.5rem)] text-slate-300 leading-relaxed max-w-3xl font-light">{textos[0]}</p>
               )}
               {textos.length > 1 && (
-                <div className="pt-2 flex flex-wrap items-center gap-6 text-xs text-slate-400 border-t border-white/10">
+                <div className="pt-2 flex flex-wrap items-center gap-6 text-[clamp(0.75rem,1vw,0.875rem)] text-slate-400 border-t border-white/10">
                   {textos.slice(1).map((item, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -302,7 +302,7 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", pre
               : "relative overflow-hidden rounded-3xl border border-white/10 shadow-2xl bg-[#07090e]"}
           >
             {campos.imagem ? (
-              <div className="relative w-full aspect-[21/9] min-h-[330px] sm:min-h-[420px] md:min-h-[500px] max-h-[720px]">
+              <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[300px]">
                 <BlocoImg
                   src={campos.imagem}
                   alt={campos.imagemAlt || ""}
@@ -313,13 +313,13 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", pre
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-[#0b0f14]/20 to-black/25" />
                     <div className="absolute inset-x-0 bottom-10 sm:bottom-14 px-6 sm:px-12 text-center">
                       {campos.badge && (
-                        <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-mono font-bold tracking-widest uppercase backdrop-blur-md shadow-lg shadow-amber-500/10">
+                        <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[clamp(0.625rem,0.8vw,0.875rem)] font-mono font-bold tracking-widest uppercase backdrop-blur-md shadow-lg shadow-amber-500/10">
                           <Crown className="w-4 h-4" />
                           {campos.badge}
                         </span>
                       )}
                       {campos.titulo && (
-                        <h1 className="mt-4 text-3xl sm:text-5xl lg:text-6xl font-black text-white font-display tracking-tight drop-shadow-lg">
+                        <h1 className="mt-4 text-[clamp(1.75rem,3.5vw,5rem)] font-black text-white font-display tracking-tight drop-shadow-lg">
                           {campos.titulo}{" "}
                           {campos.tituloDestaque && (
                             <span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_18px_rgba(251,191,36,0.25)]">
@@ -329,7 +329,7 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", pre
                         </h1>
                       )}
                       {textos[0] && (
-                        <p className="mt-3 mx-auto max-w-3xl text-sm sm:text-lg text-slate-200 font-medium drop-shadow">{textos[0]}</p>
+                        <p className="mt-3 mx-auto max-w-3xl text-[clamp(0.875rem,1.4vw,1.5rem)] text-slate-200 font-medium drop-shadow">{textos[0]}</p>
                       )}
                     </div>
                   </>
@@ -338,17 +338,17 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", pre
             ) : (
               <div className="relative w-full h-56 sm:h-72 bg-gradient-to-br from-[#121721] via-[#0f131a] to-[#07090e] flex flex-col items-center justify-center p-8 text-center">
                 {campos.badge && (
-                  <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-mono font-bold tracking-widest uppercase">
+                  <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[clamp(0.625rem,0.8vw,0.875rem)] font-mono font-bold tracking-widest uppercase">
                     <Crown className="w-4 h-4" />
                     {campos.badge}
                   </span>
                 )}
                 {campos.titulo && (
-                  <h1 className="mt-4 text-3xl sm:text-5xl font-black text-white font-display tracking-tight">
+                  <h1 className="mt-4 text-[clamp(1.75rem,3.5vw,5rem)] font-black text-white font-display tracking-tight">
                     {campos.titulo} <span className="bg-gradient-to-r from-amber-200 to-amber-500 bg-clip-text text-transparent">{campos.tituloDestaque}</span>
                   </h1>
                 )}
-                {textos[0] && <p className="mt-3 max-w-3xl text-sm sm:text-lg text-slate-300">{textos[0]}</p>}
+                {textos[0] && <p className="mt-3 max-w-3xl text-[clamp(0.875rem,1.4vw,1.5rem)] text-slate-300">{textos[0]}</p>}
               </div>
             )}
             {(fullBleedTop || (coverSemTexto && campos.imagem)) && (
