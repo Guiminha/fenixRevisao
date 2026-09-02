@@ -3,6 +3,13 @@
 Documento de contexto para retomar o trabalho a qualquer momento.
 Projeto localizado em: `C:\Users\JOHNNATAN GUIMARAES\Desktop\Plataforma Fenix`
 
+## RECONSTRUÇÃO DO EDITOR DE PÁGINAS (02/09/2026)
+
+- **Editor unificado numa única aba "Páginas"** no menu admin (`AdminTabType` agora só `paginas`; removidas as abas `bio`/`elite` e o código morto do formulário antigo de biografia `handleSaveBio`/estados `leader*` do `AdminView.tsx`; removidos arquivos `*.bak-mojibake`).
+- **Novo `PaginaEditor.tsx`**: seletor interno das 3 páginas (Grupo Fênix=`paginaBiografia`, Tecnologias=`paginaTecnologias`, Elite Milionária=`paginaElite`), lista de blocos com drag&drop nativo + setas ↑↓ + ocultar/mostrar/duplicar/excluir, formulário com campos **específicos por tipo de bloco** (não mais "despeja todos os campos"), editor de FAQ estruturado (pergunta/resposta por linha, sem o hack `|||`), upload de imagem na pasta `paginas/`, e **prévia ao vivo** usando `PaginaBlocos` (prop `preview` desativa o clique no CTA). Botão "Salvar e publicar" grava no Supabase; "Restaurar Padrão" grava os padrões no banco.
+- **Persistência garantida no Supabase**: configs `paginaBiografia`(14), `paginaTecnologias`(8), `paginaElite`(12) agora estão **salvas no banco** (antes estavam vazias — o site mostrava fallback hardcoded). Rota `/api/admin/paginas` grava `EDITAR_PAGINA` no audit com o **nome do admin** (não `req.user.role`).
+- **Scripts**: `dev-tools/seed-paginas.mts` (seed das 3 páginas no Supabase) e `dev-tools/roundtrip-paginas.mts` (validação de ida-e-volta). `dev-tools/pw-paginas-editor.cjs` reescrito p/ o editor novo — **35 OK / 0 FALHOU**. `tsc` só ErrorBoundary (pré-existente); `npm run build` OK.
+
 ## Stack
 
 - **Front:** React 19 + Vite 6 + TypeScript, Tailwind CSS v4, Zustand (store), Motion v12 (`motion/react`), Lucide React.

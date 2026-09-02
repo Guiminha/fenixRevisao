@@ -103,9 +103,7 @@ export default function Sidebar() {
     { id: "materiais", label: "Materiais", icon: FolderDown },
     { id: "fenix-social", label: "Fênix Social", icon: Flame },
     { id: "suporte", label: "Suporte", icon: LifeBuoy },
-    { id: "bio", label: "Biografia", icon: Users },
-    { id: "paginas", label: "Tecnologias", icon: FileText },
-    { id: "elite", label: "Elite Milionária", icon: Crown },
+    { id: "paginas", label: "Páginas", icon: FileText },
     { id: "backup", label: "Backup & Restauração", icon: ShieldCheck },
     { id: "servidores", label: "Servidores Externos", icon: Server }
   ];

@@ -103,7 +103,7 @@ function BlocoImg({ src, alt, className }: { src?: string; alt?: string; classNa
   );
 }
 
-export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte" }: { blocos: PaginaBloco[]; ctaModal?: "queroFazerParte" | "elite" }) {
+export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte", preview = false, coverSemTexto = false }: { blocos: PaginaBloco[]; ctaModal?: "queroFazerParte" | "elite"; preview?: boolean; coverSemTexto?: boolean }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEliteModalOpen, setIsEliteModalOpen] = useState(false);
 
@@ -276,10 +276,11 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte" }: {
               <div className="pt-2 flex justify-center">
                 <button
                   onClick={() => {
+                    if (preview) return;
                     if (ctaModal === "elite") setIsEliteModalOpen(true);
                     else setIsModalOpen(true);
                   }}
-                  className="btn-gold-metallic px-8 sm:px-12 py-4 rounded-xl text-sm sm:text-base font-bold cursor-pointer shadow-2xl inline-flex items-center gap-2.5 hover:scale-[1.03] transition-transform"
+                  className="btn-gold-metallic px-8 sm:px-12 py-4 rounded-xl text-sm sm:text-base font-bold shadow-2xl inline-flex items-center gap-2.5 hover:scale-[1.03] transition-transform"
                 >
                   {ctaModal === "elite" ? <Crown className="w-5 h-5 text-[#0b0f14]" /> : <UserPlus className="w-5 h-5" />}
                   <span>{campos.botaoTexto || "Quero fazer parte!"}</span>
@@ -307,28 +308,32 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte" }: {
                   alt={campos.imagemAlt || ""}
                   className="w-full h-full object-cover object-top"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-[#0b0f14]/20 to-black/25" />
-                <div className="absolute inset-x-0 bottom-10 sm:bottom-14 px-6 sm:px-12 text-center">
-                  {campos.badge && (
-                    <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-mono font-bold tracking-widest uppercase backdrop-blur-md shadow-lg shadow-amber-500/10">
-                      <Crown className="w-4 h-4" />
-                      {campos.badge}
-                    </span>
-                  )}
-                  {campos.titulo && (
-                    <h1 className="mt-4 text-3xl sm:text-5xl lg:text-6xl font-black text-white font-display tracking-tight drop-shadow-lg">
-                      {campos.titulo}{" "}
-                      {campos.tituloDestaque && (
-                        <span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_18px_rgba(251,191,36,0.25)]">
-                          {campos.tituloDestaque}
+                {!coverSemTexto && (
+                  <>
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14] via-[#0b0f14]/20 to-black/25" />
+                    <div className="absolute inset-x-0 bottom-10 sm:bottom-14 px-6 sm:px-12 text-center">
+                      {campos.badge && (
+                        <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-mono font-bold tracking-widest uppercase backdrop-blur-md shadow-lg shadow-amber-500/10">
+                          <Crown className="w-4 h-4" />
+                          {campos.badge}
                         </span>
                       )}
-                    </h1>
-                  )}
-                  {textos[0] && (
-                    <p className="mt-3 mx-auto max-w-3xl text-sm sm:text-lg text-slate-200 font-medium drop-shadow">{textos[0]}</p>
-                  )}
-                </div>
+                      {campos.titulo && (
+                        <h1 className="mt-4 text-3xl sm:text-5xl lg:text-6xl font-black text-white font-display tracking-tight drop-shadow-lg">
+                          {campos.titulo}{" "}
+                          {campos.tituloDestaque && (
+                            <span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_18px_rgba(251,191,36,0.25)]">
+                              {campos.tituloDestaque}
+                            </span>
+                          )}
+                        </h1>
+                      )}
+                      {textos[0] && (
+                        <p className="mt-3 mx-auto max-w-3xl text-sm sm:text-lg text-slate-200 font-medium drop-shadow">{textos[0]}</p>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="relative w-full h-56 sm:h-72 bg-gradient-to-br from-[#121721] via-[#0f131a] to-[#07090e] flex flex-col items-center justify-center p-8 text-center">
@@ -346,7 +351,7 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte" }: {
                 {textos[0] && <p className="mt-3 max-w-3xl text-sm sm:text-lg text-slate-300">{textos[0]}</p>}
               </div>
             )}
-            {fullBleedTop && (
+            {(fullBleedTop || (coverSemTexto && campos.imagem)) && (
               <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent pointer-events-none" />
             )}
           </section>
@@ -407,15 +412,19 @@ export default function PaginaBlocos({ blocos, ctaModal = "queroFazerParte" }: {
         {resto.map((bloco, idx) => renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false))}
       </div>
 
-      <QueroFazerParteModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-      />
+      {!preview && (
+        <>
+          <QueroFazerParteModal
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+          />
 
-      <EliteMilionarioModal
-        isOpen={isEliteModalOpen}
-        onClose={() => setIsEliteModalOpen(false)}
-      />
+          <EliteMilionarioModal
+            isOpen={isEliteModalOpen}
+            onClose={() => setIsEliteModalOpen(false)}
+          />
+        </>
+      )}
     </>
   );
 }

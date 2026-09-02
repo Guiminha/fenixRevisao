@@ -1802,7 +1802,7 @@ app.post("/api/admin/tecnologias", requireAdmin, async (req: any, res) => {
   }
 });
 
-// 8.1.1. Páginas institucionais editáveis (Tecnologias / Elite Milionária)
+// 8.1.1. Páginas institucionais editáveis (Grupo Fênix / Tecnologias / Elite Milionária)
 app.post("/api/admin/paginas", requireAdmin, async (req: any, res) => {
   try {
 const { chave, blocos } = req.body;
@@ -1827,7 +1827,8 @@ const cleanBlocosFinal = cleanBlocos.map((bloco: any) => ({
         faq: Array.isArray(bloco.campos.faq) ? bloco.campos.faq.map((f: any) => ({ ...f, q: cleanText(f?.q), a: cleanText(f?.a) })) : bloco.campos.faq
       } : bloco.campos
     }));
-    await dbService.savePagina(chave, cleanBlocosFinal, req.user.role, req.user?.supabaseToken);
+    const responsavel = req.user?.name || req.user?.code || req.user?.role || "admin";
+    await dbService.savePagina(chave, cleanBlocosFinal, responsavel, req.user?.supabaseToken);
     res.json({ success: true, pagina: cleanBlocosFinal });
   } catch (err: any) {
     console.error("Erro ao salvar página:", err);

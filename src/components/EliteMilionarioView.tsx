@@ -7,7 +7,7 @@ export default function EliteMilionarioView() {
 
   return (
     <div id="elite-milionario-view" className="animate-fade-in text-slate-100">
-      <PaginaBlocos blocos={blocos.length ? blocos : PAGINA_ELITE_PADRAO} ctaModal="elite" />
+      <PaginaBlocos blocos={blocos.length ? blocos : PAGINA_ELITE_PADRAO} ctaModal="elite" coverSemTexto />
     </div>
   );
 }

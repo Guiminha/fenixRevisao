@@ -306,5 +306,5 @@ export interface PaginaBloco {
 
 export type ViewType = "inicio" | "grupo-fenix" | "tecnologias" | "escola-fenix" | "conteudos" | "fenix-social" | "moderacao-fenix" | "elite-milionario" | "suporte" | "support-app" | "admin" | "admin-login";
 export type SubViewType = "cursos" | "hub-marketing" | "admin";
-export type AdminTabType = "dashboard" | "banners" | "cards-home" | "cursos" | "materiais" | "bio" | "fenix-social" | "moderadores" | "ouvidoria" | "servidores" | "cadastrar-di" | "suporte" | "backup" | "paginas" | "elite";
+export type AdminTabType = "dashboard" | "banners" | "cards-home" | "cursos" | "materiais" | "fenix-social" | "moderadores" | "ouvidoria" | "servidores" | "cadastrar-di" | "suporte" | "backup" | "paginas";
 

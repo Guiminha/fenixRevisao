@@ -1,10 +1,10 @@
 ﻿import type { PaginaBloco } from "./types";
 
 // Conteúdo padrão das páginas institucionais editáveis.
-// As views usam estes valores enquanto o admin não salvar conteúdo próprio
-// (config `paginaTecnologias` no Supabase).
-// A página Elite Milionária é de texto fixo (estilo LeaderBio) — conteúdo em
-// `src/components/EliteMilionarioView.tsx`.
+// As views (Grupo Fênix / Tecnologias / Elite Milionária) usam estes valores
+// enquanto o admin não salvar conteúdo próprio (configs `paginaBiografia`,
+// `paginaTecnologias` e `paginaElite` no Supabase). Todas as 3 páginas são
+// editáveis na aba "Páginas" da área administrativa (PaginaEditor).
 
 export const PAGINA_TECNOLOGIAS_PADRAO: PaginaBloco[] = [
   {

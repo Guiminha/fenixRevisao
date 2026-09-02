@@ -7,7 +7,7 @@ export default function LeaderBioView() {
 
   return (
     <div id="leader-bio-view" className="animate-fade-in text-slate-100">
-      <PaginaBlocos blocos={blocos.length ? blocos : PAGINA_BIOGRAFIA_PADRAO} />
+      <PaginaBlocos blocos={blocos.length ? blocos : PAGINA_BIOGRAFIA_PADRAO} coverSemTexto />
     </div>
   );
 }

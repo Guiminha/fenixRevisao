@@ -72,7 +72,7 @@ import {
 } from "lucide-react";
 import FenixMediaCarousel from "./FenixMediaCarousel";
 import PaginaEditor from "./PaginaEditor";
-import { Curso, Material, Novidade, LeaderBio, Banner } from "../types";
+import { Curso, Material, Novidade, Banner } from "../types";
 import { Layers } from "lucide-react";
 
 export default function AdminView() {
@@ -104,7 +104,6 @@ export default function AdminView() {
     deleteCurso,
     saveMaterial, 
     deleteMaterial,
-    updateLeaderBio,
     saveCategoriasMateriais,
     uploadLogo,
     resetLogo,
@@ -2091,99 +2090,6 @@ export default function AdminView() {
       setMatIsPublic(false);
     } else {
       triggerNotification("error", result.error || "Erro ao salvar material.");
-    }
-  };
-
-  // --- LEADER BIO STATE & HANDLERS ---
-  const [leaderNome, setLeaderNome] = useState("");
-  const [leaderCargo, setLeaderCargo] = useState("");
-  const [leaderBioShort, setLeaderBioShort] = useState("");
-  const [leaderFoto, setLeaderFoto] = useState("");
-  const [leaderFotoLoading, setLeaderFotoLoading] = useState(false);
-  const [isDraggingLeaderFoto, setIsDraggingLeaderFoto] = useState(false);
-
-  const handleLeaderFotoFile = (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      triggerNotification("error", "Selecione um arquivo de imagem válido (PNG, JPG, WEBP).");
-      return;
-    }
-    setLeaderFotoLoading(true);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64String = reader.result as string;
-      const res = await uploadFile(base64String, file.name, "institucional");
-      if (res.success && res.url) {
-        setLeaderFoto(res.url);
-        triggerNotification("success", "Foto de perfil do fundador carregada com sucesso!");
-      } else {
-        triggerNotification("error", res.error || "Erro ao fazer upload da imagem.");
-      }
-      setLeaderFotoLoading(false);
-    };
-    reader.onerror = () => {
-      triggerNotification("error", "Erro ao ler o arquivo de imagem.");
-      setLeaderFotoLoading(false);
-    };
-    reader.readAsDataURL(file);
-  };
-  const [leaderLocal, setLeaderLocal] = useState("");
-  const [leaderExp, setLeaderExp] = useState("");
-  const [leaderImp, setLeaderImp] = useState("");
-  const [leaderCitacao, setLeaderCitacao] = useState("");
-  
-  const [leaderPara1, setLeaderPara1] = useState("");
-  const [leaderPara2, setLeaderPara2] = useState("");
-  const [leaderPara3, setLeaderPara3] = useState("");
-
-  const [leaderTimeline, setLeaderTimeline] = useState<any[]>([]);
-  const [leaderValores, setLeaderValores] = useState<any[]>([]);
-
-  // Prepopulate form on tab open
-  useEffect(() => {
-    if (publicData?.leaderBio && activeTab === "bio") {
-      const bio = publicData.leaderBio;
-      setLeaderNome(bio.nome);
-      setLeaderCargo(bio.cargo);
-      setLeaderBioShort(bio.bio);
-      setLeaderFoto(bio.foto);
-      setLeaderLocal(bio.localizacao);
-      setLeaderExp(bio.experiencia);
-      setLeaderImp(bio.impacto);
-      setLeaderCitacao(bio.citacao);
-      setLeaderPara1(bio.historia[0] || "");
-      setLeaderPara2(bio.historia[1] || "");
-      setLeaderPara3(bio.historia[2] || "");
-      setLeaderTimeline([...bio.timeline]);
-      setLeaderValores([...bio.valores]);
-    }
-  }, [publicData, activeTab]);
-
-  const handleSaveBio = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!leaderNome || !leaderCargo || !leaderBioShort) {
-      triggerNotification("error", "Preencha o nome, cargo e bio curta do fundador.");
-      return;
-    }
-
-    const payload: LeaderBio = {
-      nome: leaderNome,
-      cargo: leaderCargo,
-      bio: leaderBioShort,
-      foto: leaderFoto,
-      localizacao: leaderLocal,
-      experiencia: leaderExp,
-      impacto: leaderImp,
-      citacao: leaderCitacao,
-      historia: [leaderPara1, leaderPara2, leaderPara3].filter(Boolean),
-      valores: leaderValores,
-      timeline: leaderTimeline
-    };
-
-    const result = await updateLeaderBio(payload);
-    if (result.success) {
-      triggerNotification("success", "Biografia do fundador atualizada!");
-    } else {
-      triggerNotification("error", result.error || "Erro ao atualizar bio.");
     }
   };
 
@@ -5621,15 +5527,6 @@ export default function AdminView() {
         </div>
       )}
 
-      {/* TAB CONTENT 5: LEADER BIO EDITOR */}
-      {/* TAB CONTENT: BIOGRAFIA (EDITOR DE BLOCOS) */}
-      {activeTab === "bio" && (
-        <div className="space-y-8 animate-fade-in">
-          <PaginaEditor chaveInicial="paginaBiografia" />
-        </div>
-      )}
-
-
       {/* TAB CONTENT: FENIX SOCIAL ADMIN */}
       {activeTab === "fenix-social" && (
         <div className="space-y-8 animate-fade-in">
@@ -6631,17 +6528,10 @@ export default function AdminView() {
         </div>
       )}
 
-      {/* TAB CONTENT: PÁGINAS (EDITOR DE CONTEÚDO INSTITUCIONAL) */}
+      {/* TAB CONTENT: PÁGINAS (EDITOR UNIFICADO DE CONTEÚDO INSTITUCIONAL) */}
       {activeTab === "paginas" && (
         <div className="space-y-8 animate-fade-in">
-          <PaginaEditor chaveInicial="paginaTecnologias" />
-        </div>
-      )}
-
-      {/* TAB CONTENT: ELITE MILIONÁRIA (EDITOR DE BLOCOS) */}
-      {activeTab === "elite" && (
-        <div className="space-y-8 animate-fade-in">
-          <PaginaEditor chaveInicial="paginaElite" />
+          <PaginaEditor />
         </div>
       )}
     </div>
