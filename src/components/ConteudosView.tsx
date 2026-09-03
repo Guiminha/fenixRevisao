@@ -199,7 +199,7 @@ export default function ConteudosView() {
                 </div>
                 
                 {/* Responsive Cards Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-5 cv-auto">
+                <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-5 cv-auto">
                   {catMaterials.map((mat) => {
                     const Icon = getMediaIcon(mat.tipo);
                     return (
@@ -286,10 +286,10 @@ export default function ConteudosView() {
 
       {/* Dedicated Share Modal */}
       {shareModalMaterial && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div 
             id="share-material-modal"
-            className="w-full max-w-md bg-[#151b22] border border-[#2a323d] rounded-2xl p-6 relative overflow-hidden flex flex-col gap-4 shadow-2xl animate-scale-up"
+            className="w-full max-w-md bg-[#151b22] border border-[#2a323d] rounded-2xl p-6 relative overflow-hidden flex flex-col gap-4 shadow-2xl animate-scale-up my-auto"
           >
             <button
               type="button"

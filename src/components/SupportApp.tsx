@@ -1239,7 +1239,7 @@ export default function SupportApp() {
           <img
             src={logoUrl}
             alt="Logo Fênix"
-            className="h-30 max-w-[480px] object-contain"
+            className="h-10 sm:h-12 md:h-auto max-w-[120px] sm:max-w-[200px] md:max-w-[480px] object-contain"
             referrerPolicy="no-referrer"
           />
         </div>

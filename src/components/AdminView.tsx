@@ -2133,7 +2133,7 @@ export default function AdminView() {
 
       {/* Modern Floating Notification Toast */}
       {(successMsg || errorMsg) && (
-        <div className="fixed bottom-6 right-6 z-50 animate-slide-in max-w-sm">
+        <div className="fixed bottom-6 right-4 left-4 sm:left-auto sm:right-6 z-50 animate-slide-in max-w-sm">
           <div className={`p-4 rounded-2xl shadow-2xl backdrop-blur-xl border ${
             successMsg 
               ? "bg-green-950/80 border-green-500/30 text-green-300 shadow-green-950/25" 

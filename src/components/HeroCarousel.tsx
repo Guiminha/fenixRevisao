@@ -149,7 +149,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   return (
     <div 
       id="hero-carousel-container"
-      className="relative w-full aspect-[21/9] min-h-[260px] sm:min-h-[320px] overflow-hidden select-none"
+      className="relative w-full aspect-[21/9] min-h-[360px] sm:min-h-[320px] overflow-hidden select-none"
     >
       {/* Background Slides Track */}
       <div className="absolute inset-0 w-full h-full">

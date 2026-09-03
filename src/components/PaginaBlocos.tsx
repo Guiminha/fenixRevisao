@@ -100,7 +100,7 @@ export default function PaginaBlocos({
             <div className="absolute top-0 right-0 -mt-24 -mr-24 w-[28rem] h-[28rem] rounded-full bg-[#d12a62]/10 blur-3xl pointer-events-none" />
             <div className="relative z-10 max-w-4xl mx-auto text-center space-y-6">
               {/* Título em caixa alta (remove traço residual " — " do dado, se houver) */}
-              <h1 className="text-[clamp(1.95rem,3.9vw,4.55rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] whitespace-nowrap">
+              <h1 className="text-[clamp(1.4rem,3.9vw,4.55rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] whitespace-normal md:whitespace-nowrap">
                 {(campos.titulo || "").replace(/\s*[—–-]\s*$/, "").trim()}
               </h1>
               {/* Subtítulo logo abaixo do título */}
@@ -144,7 +144,7 @@ export default function PaginaBlocos({
           <section key={bloco.id} className={fullBleedTop ? `${FULL_BLEED} bg-[#07090e]` : "relative overflow-hidden rounded-[2rem] bg-[#07090e]"}>
             {campos.imagem ? (
               <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[300px]">
-                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-cover object-top" />
+                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-contain md:object-cover md:object-top" />
                 {!coverSemTexto && (
                   <>
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14]/85 via-[#0b0f14]/25 to-black/20" />
@@ -275,7 +275,7 @@ export default function PaginaBlocos({
         return (
           <div key={bloco.id} className="relative py-6">
             <div className="relative overflow-hidden rounded-[1.5rem] shadow-2xl border border-white/10">
-              <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-[280px] sm:h-[400px] md:h-[480px] object-cover" />
+              <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-auto md:h-[480px] object-contain md:object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14]/90 via-transparent to-transparent" />
               {campos.legenda && (
                 <div className="absolute inset-x-0 bottom-0 px-6 sm:px-8 py-5 sm:py-7">

@@ -332,7 +332,7 @@ export default function CustomVideoPlayer({ src, poster, title, autoPlay = false
                 step={0.05}
                 value={isMuted ? 0 : volume}
                 onChange={handleVolumeChange}
-                className="w-16 h-1 bg-white/30 accent-[#d12a62] rounded-lg cursor-pointer"
+                className="w-16 h-1 bg-white/30 accent-[#d12a62] rounded-lg cursor-pointer hidden sm:block"
               />
             </div>
 
