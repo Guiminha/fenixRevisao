@@ -35,8 +35,8 @@ function HeroSlideImage({ slide, index, currentIndex }: { slide: any; index: num
       loading={index === currentIndex ? "eager" : "lazy"}
       decoding="async"
       fetchPriority={index === currentIndex ? "high" : undefined}
-      className="w-full h-full object-contain md:object-cover object-top scale-105 transform transition-transform duration-[7000ms] ease-out"
-      style={{ transform: index === currentIndex ? "scale(1.0)" : "scale(1.05)" }}
+      className="w-full h-full object-contain md:object-cover object-top"
+      
       onError={() => setErrou(true)}
     />
   );
@@ -177,23 +177,21 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
       {/* Slide Content Overlay */}
       <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 max-w-4xl animate-fade-in pb-10 sm:pb-8">
-        <AnimatePresence mode="wait">
         <motion.div
           key={currentSlide.id + "-" + safeIndex}
           initial="hidden"
           animate="visible"
-          exit="hidden"
           className="flex flex-col"
           variants={{
             hidden: {},
-            visible: { transition: { staggerChildren: 0.09, delayChildren: 0.08 } },
+            visible: { transition: { staggerChildren: 0.04, delayChildren: 0 } },
           }}
         >
           <motion.div
             className="flex flex-wrap items-center gap-2 mb-2 md:mb-3"
             variants={{
-              hidden: { opacity: 0, y: 22, filter: "blur(6px)" },
-              visible: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] } },
+              hidden: { opacity: 0, y: 16 },
+              visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } },
             }}
           >
             {/* Category/Type Badge */}
@@ -214,8 +212,8 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
             className="text-[clamp(1.5rem,4vw,5.5rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[0.95] drop-shadow-md"
             style={{ color: (currentSlide as Banner).corTitulo || "#ffffff" }}
             variants={{
-              hidden: { opacity: 0, y: 32, filter: "blur(8px)" },
-              visible: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.75, ease: [0.16, 1, 0.3, 1] } },
+              hidden: { opacity: 0, y: 24 },
+              visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] } },
             }}
           >
             {currentSlide.titulo}
@@ -223,11 +221,11 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Description */}
           <motion.p
-            className="text-[clamp(0.75rem,1.3vw,1.25rem)] max-w-xl mb-4 md:mb-8 leading-relaxed italic line-clamp-3 md:line-clamp-none drop-shadow-sm font-medium"
+            className="text-[clamp(0.75rem,1.3vw,1.25rem)] max-w-xl mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium"
             style={{ color: (currentSlide as Banner).corDescricao || "#ffffff" }}
             variants={{
-              hidden: { opacity: 0, y: 24, filter: "blur(5px)" },
-              visible: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.7, ease: [0.16, 1, 0.3, 1] } },
+              hidden: { opacity: 0, y: 18 },
+              visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] } },
             }}
           >
             {currentSlide.descricao}
@@ -237,8 +235,8 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
           <motion.div
             className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 md:gap-4 w-full sm:w-auto"
             variants={{
-              hidden: { opacity: 0, y: 20 },
-              visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] } },
+              hidden: { opacity: 0, y: 16 },
+              visible: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
             }}
           >
             {hasBanners ? (
@@ -293,7 +291,6 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
             )}
           </motion.div>
         </motion.div>
-        </AnimatePresence>
       </div>
 
       {/* Carousel Dot Indicators (Glow active, translucent white inactive) */}
