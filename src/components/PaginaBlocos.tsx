@@ -98,7 +98,7 @@ export default function PaginaBlocos({
           >
             <FundoDecorativo cor={cor ? cor.fg ? "rosa" : campos.cor || "rosa" : "rosa"} />
             <div className="absolute top-0 right-0 -mt-24 -mr-24 w-[28rem] h-[28rem] rounded-full bg-[#d12a62]/10 blur-3xl pointer-events-none" />
-            <div className="relative z-10 space-y-7 max-w-5xl">
+            <div className="relative z-10 space-y-7 max-w-4xl mx-auto text-center">
               {campos.badge && (
                 <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#d12a62]/15 border border-[#d12a62]/25 text-[#ff719e] text-[clamp(0.625rem,0.8vw,0.875rem)] font-semibold tracking-[0.2em] uppercase">
                   <Sparkles className="w-3.5 h-3.5" />
@@ -112,10 +112,10 @@ export default function PaginaBlocos({
                 )}
               </h1>
               {textos[0] && (
-                <p className="text-[clamp(1rem,1.5vw,1.4rem)] text-slate-300 leading-relaxed max-w-3xl font-light">{textos[0]}</p>
+                <p className="text-[clamp(1rem,1.5vw,1.4rem)] text-slate-300 leading-relaxed max-w-3xl mx-auto font-light">{textos[0]}</p>
               )}
               {textos.length > 1 && (
-                <div className="pt-4 flex flex-wrap items-center gap-x-8 gap-y-3 text-[clamp(0.875rem,1.1vw,1rem)] text-slate-400">
+                <div className="pt-4 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-[clamp(0.875rem,1.1vw,1rem)] text-slate-400">
                   {textos.slice(1).map((item, i) => (
                     <div key={i} className="flex items-center gap-2.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-[#ff719e] to-[#d12a62] shrink-0" />
@@ -185,9 +185,9 @@ export default function PaginaBlocos({
 
       case "hero_header":
         return (
-          <section key={bloco.id} className="relative overflow-hidden rounded-[2rem] px-6 sm:px-10 py-12 sm:py-16 space-y-4 max-w-5xl">
+          <section key={bloco.id} className="relative mx-auto max-w-4xl text-center px-4 sm:px-6 py-10 sm:py-12 space-y-4">
             <FundoDecorativo cor={campos.cor || "rosa"} />
-            <div className="relative z-10 flex items-start gap-4">
+            <div className="relative z-10 flex flex-col items-center gap-4">
               {campos.icone && (
                 <span className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center ${cor.blob} border ${cor.ring}`}>
                   <Icone nome={campos.icone} className={`w-7 h-7 ${cor.fg}`} />
@@ -197,7 +197,7 @@ export default function PaginaBlocos({
                 {campos.eyebrow && <span className={`text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block ${cor.fg}`}>{campos.eyebrow}</span>}
                 <h2 className="text-[clamp(1.75rem,3.2vw,3.5rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h2>
                 {textos.map((t, i) => (
-                  <p key={i} className="text-[clamp(1rem,1.5vw,1.25rem)] max-w-3xl text-slate-300 leading-relaxed">{t}</p>
+                  <p key={i} className="text-[clamp(1rem,1.5vw,1.25rem)] max-w-2xl mx-auto text-slate-300 leading-relaxed">{t}</p>
                 ))}
               </div>
             </div>
@@ -207,11 +207,11 @@ export default function PaginaBlocos({
       case "card_tecnologia": {
         const imagemEsquerda = index % 2 === 0;
         return (
-          <div key={bloco.id} className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#10151d]/90 via-[#0d1117] to-[#0b0f14]">
+          <div key={bloco.id} className="relative overflow-hidden rounded-[1.5rem] border border-white/[0.06] bg-[#0d1117]/70 shadow-xl min-h-[280px]">
             <FundoDecorativo cor={campos.cor || "rosa"} />
-            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 items-center gap-8 lg:gap-12 p-6 sm:p-10">
-              <div className={`lg:col-span-7 space-y-4 ${imagemEsquerda ? "order-2 lg:order-1" : "order-2"}`}>
-                <div className="flex items-center gap-4">
+            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 items-center gap-8 lg:gap-10 p-6 sm:p-10">
+              <div className={`lg:col-span-7 space-y-4 text-center lg:text-left ${imagemEsquerda ? "order-2 lg:order-1" : "order-2"}`}>
+                <div className="flex items-center justify-center lg:justify-start gap-4">
                   {campos.icone && (
                     <span className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center ${cor.blob} border ${cor.ring}`}>
                       <Icone nome={campos.icone} className={`w-7 h-7 ${cor.fg}`} />
@@ -219,7 +219,7 @@ export default function PaginaBlocos({
                   )}
                   <div className="space-y-1">
                     {campos.eyebrow && <span className={`text-[clamp(0.75rem,1vw,0.9rem)] font-bold uppercase tracking-[0.2em] block ${cor.fg}`}>{campos.eyebrow}</span>}
-                    {campos.titulo && <h3 className="text-[clamp(1.75rem,3vw,3rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h3>}
+                    {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h3>}
                   </div>
                 </div>
                 {textos.map((t, i) => (
@@ -251,7 +251,7 @@ export default function PaginaBlocos({
 
       case "texto":
         return (
-          <section key={bloco.id} className="relative overflow-hidden rounded-[2rem] px-6 sm:px-10 py-12 sm:py-16 space-y-4 max-w-5xl">
+          <section key={bloco.id} className="relative mx-auto max-w-3xl text-center px-4 sm:px-6 py-8 sm:py-10 space-y-4">
             <FundoDecorativo cor="dourado" />
             <div className="relative z-10 space-y-4">
               {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-amber-400">{campos.eyebrow}</span>}
@@ -280,14 +280,14 @@ export default function PaginaBlocos({
 
       case "lista":
         return (
-          <section key={bloco.id} className="relative overflow-hidden rounded-[2rem] px-6 sm:px-10 py-12 sm:py-16 space-y-6 max-w-5xl">
+          <section key={bloco.id} className="relative mx-auto max-w-4xl px-4 sm:px-6 py-8 sm:py-10 space-y-6 text-center">
             <FundoDecorativo cor="dourado" />
             <div className="relative z-10 space-y-6">
               <div className="space-y-2">
                 {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-[#ff719e]">{campos.eyebrow}</span>}
                 {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
               </div>
-              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4">
+              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4 text-left">
                 {(campos.itens || []).map((item, i) => (
                   <div key={i} className="flex items-start gap-3">
                     <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
@@ -301,14 +301,14 @@ export default function PaginaBlocos({
 
       case "faq":
         return (
-          <section key={bloco.id} className="relative overflow-hidden rounded-[2rem] px-6 sm:px-10 py-12 sm:py-16 space-y-6 max-w-5xl">
+          <section key={bloco.id} className="relative mx-auto max-w-4xl px-4 sm:px-6 py-8 sm:py-10 space-y-6 text-center">
             <FundoDecorativo cor="rosa" />
             <div className="relative z-10 space-y-6">
               <div className="space-y-2">
                 {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-[#ff719e]">{campos.eyebrow}</span>}
                 {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
               </div>
-              <div className="divide-y divide-white/[0.06]">
+              <div className="divide-y divide-white/[0.06] text-left max-w-3xl mx-auto">
                 {(campos.faq || []).map((item, i) => (
                   <div key={i} className="py-6 flex items-start gap-3">
                     <HelpCircle className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
@@ -376,10 +376,18 @@ export default function PaginaBlocos({
 
   return (
     <>
-      <div className="bg-[#0b0f14]">
-        {topoFullBleed && renderBloco(topo, 0, true)}
-        <div className={`max-w-6xl mx-auto space-y-10 sm:space-y-14${topoFullBleed ? " mt-10" : " pt-6 sm:pt-10"}`}>
-          {resto.map((bloco, idx) => renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false))}
+      <div className="relative bg-[#0b0f14] overflow-hidden">
+        {/* Degradê de fundo global e discreto (nas cores da marca) — atrás de todo o conteúdo */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[50rem] h-[50rem] rounded-full bg-[#d12a62]/8 blur-3xl" />
+          <div className="absolute top-1/3 -left-40 w-[36rem] h-[36rem] rounded-full bg-amber-500/5 blur-3xl" />
+          <div className="absolute bottom-0 right-0 w-[40rem] h-[40rem] rounded-full bg-[#ff719e]/5 blur-3xl" />
+        </div>
+        <div className="relative z-10">
+          {topoFullBleed && renderBloco(topo, 0, true)}
+          <div className={`max-w-5xl mx-auto space-y-12 sm:space-y-16 px-4 sm:px-6${topoFullBleed ? " mt-10" : " pt-6 sm:pt-10"}`}>
+            {resto.map((bloco, idx) => renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false))}
+          </div>
         </div>
       </div>
 
