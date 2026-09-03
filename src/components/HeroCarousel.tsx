@@ -176,7 +176,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
       <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent z-15 pointer-events-none" />
 
       {/* Slide Content Overlay */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 max-w-4xl animate-fade-in pb-10 sm:pb-8">
+      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full sm:max-w-[60%] lg:max-w-[45%] animate-fade-in pb-10 sm:pb-8">
         <motion.div
           key={currentSlide.id + "-" + safeIndex}
           initial="hidden"
@@ -209,7 +209,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
           {/* Title */}
           <motion.h1
             id={`hero-slide-title-${currentSlide.id}`}
-            className="text-[clamp(1.5rem,4vw,5.5rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[0.95] drop-shadow-md"
+            className="text-[clamp(1.5rem,4vw,4.5rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[1.02] drop-shadow-md"
             style={{ color: (currentSlide as Banner).corTitulo || "#ffffff" }}
             variants={{
               hidden: { opacity: 0, y: 24 },
@@ -221,7 +221,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Description */}
           <motion.p
-            className="text-[clamp(0.75rem,1.3vw,1.25rem)] max-w-xl mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium"
+            className="text-[clamp(0.9rem,1.5vw,1.6rem)] mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium"
             style={{ color: (currentSlide as Banner).corDescricao || "#ffffff" }}
             variants={{
               hidden: { opacity: 0, y: 18 },
