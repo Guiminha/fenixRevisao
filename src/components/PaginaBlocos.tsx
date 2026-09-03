@@ -98,19 +98,27 @@ export default function PaginaBlocos({
           >
             <FundoDecorativo cor={cor ? cor.fg ? "rosa" : campos.cor || "rosa" : "rosa"} />
             <div className="absolute top-0 right-0 -mt-24 -mr-24 w-[28rem] h-[28rem] rounded-full bg-[#d12a62]/10 blur-3xl pointer-events-none" />
-            <div className="relative z-10 space-y-7 max-w-4xl mx-auto text-center">
-              {campos.badge && (
-                <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#d12a62]/15 border border-[#d12a62]/25 text-[#ff719e] text-[clamp(0.625rem,0.8vw,0.875rem)] font-semibold tracking-[0.2em] uppercase">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  {campos.badge}
-                </span>
-              )}
-              <h1 className="text-[clamp(2rem,4.2vw,5.5rem)] font-black tracking-tight text-white font-display leading-[1.05]">
-                {campos.titulo}{" "}
-                {campos.tituloDestaque && (
-                  <span className="bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent">{campos.tituloDestaque}</span>
-                )}
+            <div className="relative z-10 max-w-4xl mx-auto text-center space-y-6">
+              {/* Título em caixa alta (remove traço residual " — " do dado, se houver) */}
+              <h1 className="text-[clamp(1.95rem,3.9vw,4.55rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] whitespace-nowrap">
+                {(campos.titulo || "").replace(/\s*[—–-]\s*$/, "").trim()}
               </h1>
+              {/* Subtítulo logo abaixo do título */}
+              {campos.tituloDestaque && (
+                <p className="text-[clamp(1.43rem,2.34vw,2.08rem)] font-semibold bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent">
+                  {campos.tituloDestaque}
+                </p>
+              )}
+              {/* Espaço antes do badge */}
+              {campos.badge && (
+                <div className="pt-4">
+                  <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#d12a62]/15 border border-[#d12a62]/25 text-[#ff719e] text-[clamp(0.75rem,1vw,0.9rem)] font-semibold tracking-[0.15em] uppercase">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    {campos.badge}
+                  </span>
+                </div>
+              )}
+              {/* Parágrafo normal */}
               {textos[0] && (
                 <p className="text-[clamp(1rem,1.5vw,1.4rem)] text-slate-300 leading-relaxed max-w-3xl mx-auto font-light">{textos[0]}</p>
               )}
