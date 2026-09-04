@@ -144,7 +144,7 @@ export default function PaginaBlocos({
           <section key={bloco.id} className={fullBleedTop ? `${FULL_BLEED} bg-[#07090e]` : "relative overflow-hidden rounded-[2rem] bg-[#07090e]"}>
             {campos.imagem ? (
               <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[300px]">
-                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-contain md:object-cover md:object-top" />
+                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-cover object-top" />
                 {!coverSemTexto && (
                   <>
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14]/85 via-[#0b0f14]/25 to-black/20" />
@@ -275,7 +275,7 @@ export default function PaginaBlocos({
         return (
           <div key={bloco.id} className="relative py-6">
             <div className="relative overflow-hidden rounded-[1.5rem] shadow-2xl border border-white/10">
-              <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-auto md:h-[480px] object-contain md:object-cover" />
+              <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-[240px] sm:h-[400px] md:h-[480px] object-cover" />
               <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14]/90 via-transparent to-transparent" />
               {campos.legenda && (
                 <div className="absolute inset-x-0 bottom-0 px-6 sm:px-8 py-5 sm:py-7">

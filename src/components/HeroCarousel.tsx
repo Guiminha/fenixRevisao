@@ -149,7 +149,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   return (
     <div 
       id="hero-carousel-container"
-      className="relative w-full aspect-[21/9] min-h-[360px] sm:min-h-[320px] overflow-hidden select-none"
+      className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[320px] overflow-hidden select-none"
     >
       {/* Background Slides Track */}
       <div className="absolute inset-0 w-full h-full">
@@ -176,7 +176,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
       <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent z-15 pointer-events-none" />
 
       {/* Slide Content Overlay */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full sm:max-w-[60%] lg:max-w-[45%] animate-fade-in pb-10 sm:pb-8">
+      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full max-w-[88%] sm:max-w-[60%] lg:max-w-[45%] animate-fade-in pb-10 sm:pb-8">
         <motion.div
           key={currentSlide.id + "-" + safeIndex}
           initial="hidden"
