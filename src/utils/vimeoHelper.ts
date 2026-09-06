@@ -57,7 +57,7 @@ export function parseVimeoInput(input: string): ParsedVimeo {
   // badge=0: hides badge
   // autopause=0: keeps playing smoothly
   // transparent=0, dnt=1
-  const embedUrl = `https://player.vimeo.com/video/${videoId}?${hQuery}title=0&byline=0&portrait=0&badge=0&autopause=0&player_id=0&app_id=58479&transparent=0&dnt=1`;
+  const embedUrl = `https://player.vimeo.com/video/${videoId}?${hQuery}title=0&byline=0&portrait=0&badge=0&autopause=0&player_id=0&app_id=58479&transparent=0&dnt=1&color=d12a62&playsinline=1`;
 
   return {
     videoId,

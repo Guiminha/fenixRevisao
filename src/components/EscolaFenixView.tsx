@@ -38,6 +38,9 @@ export default function EscolaFenixView() {
 
   const [activeTab, setActiveTab] = useState<"cursos" | "hub-marketing">("cursos");
 
+  // Galeria interna: seção aberta em "Ver Todos"
+  const [galeriaSecao, setGaleriaSecao] = useState<"cursos" | "series" | "treinamentos" | null>(null);
+
   // Detailed view active states
   const [currentModuleIdx, setCurrentModuleIdx] = useState<number>(0);
   const [currentAulaIdx, setCurrentAulaIdx] = useState<number>(0);
@@ -45,7 +48,6 @@ export default function EscolaFenixView() {
 
   // Video & iframe element refs
   const videoRef = useRef<HTMLVideoElement>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Load restricted data if logged in
   useEffect(() => {
@@ -144,61 +146,6 @@ export default function EscolaFenixView() {
     // Auto-advance to next lesson
     handleNextAula();
   }, [activeCourse, currentModuleIdx, currentAulaIdx, completedLessons, toggleLessonCompleted, handleNextAula]);
-
-  // Ensure iframe listening for Vimeo events
-  useEffect(() => {
-    if (!iframeRef.current) return;
-    const currentMod = activeCourse?.modulos[currentModuleIdx];
-    const currentAula = currentMod?.aulas[currentAulaIdx] || activeCourse?.modulos[0]?.aulas[0];
-    // Posta APENAS para a origem do player Vimeo (nunca "*")
-    const targetOrigin = "https://player.vimeo.com";
-    const timer = setTimeout(() => {
-      try {
-        iframeRef.current?.contentWindow?.postMessage('{"event":"listening","id":1}', targetOrigin);
-        iframeRef.current?.contentWindow?.postMessage('{"method":"addEventListener","value":"finish"}', targetOrigin);
-        iframeRef.current?.contentWindow?.postMessage('{"method":"addEventListener","value":"ended"}', targetOrigin);
-      } catch (e) {}
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [currentModuleIdx, currentAulaIdx, activeCourse?.id]);
-
-  // Window message listener for Vimeo video completion
-  useEffect(() => {
-    // Só aceita mensagens vindas do player Vimeo embutido.
-    // Um iframe malicioso na página não consegue mais forjar "finish"/"ended"
-    // para avançar aulas ou marcar aulas como concluídas.
-    const PLAYER_ORIGINS = new Set([
-      "https://player.vimeo.com"
-    ]);
-    const handleWindowMessage = (event: MessageEvent) => {
-      try {
-        if (!PLAYER_ORIGINS.has(event.origin)) return;
-        let data = event.data;
-        if (typeof data === "string" && (data.startsWith("{") || data.startsWith("["))) {
-          data = JSON.parse(data);
-        }
-        if (!data || typeof data !== "object") return;
-
-        // Vimeo ENDED
-        const isVimeoEnded =
-          data.event === "finish" ||
-          data.event === "ended" ||
-          data.event === "onFinish";
-
-        if (isVimeoEnded) {
-          console.log("[Escola Fênix] Vídeo finalizado via mensagem do iframe. Avançando para a próxima aula...");
-          handleVideoEnd();
-        }
-      } catch (e) {
-        // ignore invalid JSON
-      }
-    };
-
-    window.addEventListener("message", handleWindowMessage);
-    return () => {
-      window.removeEventListener("message", handleWindowMessage);
-    };
-  }, [handleVideoEnd]);
 
   // HTML5 Video Events
   const handleVideoTimeUpdate = () => {
@@ -336,24 +283,19 @@ export default function EscolaFenixView() {
                 embedInfo?.isEmbed ? (
                   <div className="relative w-full h-full">
                     <iframe
-                      ref={iframeRef}
                       src={embedInfo.src}
-                      className="w-full h-full border-0 relative z-10"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                      className="w-full h-full border-0"
+                      allow="autoplay; fullscreen; encrypted-media"
                       allowFullScreen
                       title={activeAula.titulo}
+                      referrerPolicy="no-referrer"
                     />
-                    {/* Anti-redirect top bar click shield for Vimeo */}
-                    {embedInfo.type === "vimeo" && (
-                      <div 
-                        className="absolute top-0 left-0 right-0 h-14 z-20 pointer-events-auto bg-transparent"
-                        title="Fênix Escola - Player Protegido"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                      />
-                    )}
+                    {/* Shield no topo: bloqueia clique no logo/"watch on vimeo", sem cobrir os controles */}
+                    <div
+                      className="absolute top-0 left-0 right-0 h-12 z-20"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      title={activeAula.titulo}
+                    />
                   </div>
                 ) : (
                   <CustomVideoPlayer
@@ -652,7 +594,7 @@ export default function EscolaFenixView() {
   ];
 
   return (
-    <div id="course-catalog-view" className="space-y-8 pb-12 animate-fade-in select-none">
+    <div id="course-catalog-view" className="space-y-12 sm:space-y-16 pb-12 animate-fade-in select-none">
       {/* Restrict Page Indicator */}
       <div className="flex items-center gap-2 text-xs font-mono text-[#8a96a3]">
         <Lock className="w-3.5 h-3.5 text-amber-500" />
@@ -674,28 +616,78 @@ export default function EscolaFenixView() {
         </div>
       </div>
 
-      {/* Seções estilo Netflix */}
+      {/* Seções em grade (2 fileiras) + galeria "Ver Todos" */}
       {SECOES.map(({ key, label, desc }) => {
-        const items = cursos.filter((c) => secaoOf(c) === key);
-        if (items.length === 0) return null;
+        const itens = cursos.filter((c) => secaoOf(c) === key);
+        if (itens.length === 0) return null;
+
+        // Modo galeria (tela interna): mostra TODOS os itens da seção
+        if (galeriaSecao === key) {
+          return (
+            <section key={key} className="space-y-4">
+              <button
+                onClick={() => setGaleriaSecao(null)}
+                className="flex items-center gap-2 text-xs font-semibold text-white bg-black/40 hover:bg-black/70 border border-white/15 px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Voltar
+              </button>
+              <div className="space-y-1">
+                <h3 className="text-lg md:text-2xl font-bold font-display text-white tracking-tight">{label}</h3>
+                <p className="text-[11px] md:text-xs text-[#8a96a3]">{desc}</p>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+                {itens.map((curso) => (
+                  <div key={curso.id}>
+                    <ContentCard
+                      id={curso.id}
+                      titulo={curso.titulo}
+                      imagem={curso.imagem}
+                      categoria={curso.categoria}
+                      tipo="course"
+                      duracao={curso.duracao}
+                      professorNome={curso.professorNome}
+                      professorFoto={curso.professorFoto}
+                      professorEspecialidade={curso.professorEspecialidade}
+                      lessons={curso.modulos.flatMap((m) => m.aulas)}
+                      onClick={() => {
+                        setActiveCourse(curso);
+                        setOpenModules({ "0": true });
+                        setCurrentModuleIdx(0);
+                        setCurrentAulaIdx(0);
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        }
+
         return (
-          <section key={key} className="space-y-3">
+          <section key={key} className="relative space-y-9 pt-6 border-t border-white/5">
+            {/* Separador sutil de seção */}
+            <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[#d12a62]/30 to-transparent -translate-y-1/2" />
             <div className="flex items-end justify-between gap-3">
               <div className="space-y-0.5">
-                <h3 className="text-lg md:text-2xl font-bold font-display text-white tracking-tight flex items-center gap-2.5">
-                  <span className="w-1 h-5 md:h-6 bg-[#d12a62] rounded-full inline-block" />
-                  {label}
-                </h3>
+                <div className="relative w-full sm:w-[50%] rounded-r-full py-2 pl-2 pr-4 min-w-0">
+                  <div className="absolute inset-0 bg-gradient-to-r from-[#d12a62]/40 via-[#d12a62]/20 to-transparent rounded-r-full" />
+                  <h3 className="relative text-2xl md:text-4xl font-bold font-display text-white tracking-tight uppercase flex items-center gap-2.5 whitespace-normal">
+                    <span className="w-1 h-5 md:h-6 bg-[#d12a62] rounded-full inline-block shrink-0" />
+                    {label}
+                  </h3>
+                </div>
                 <p className="text-[11px] md:text-xs text-[#8a96a3] pl-3.5">{desc}</p>
               </div>
               <span className="text-[10px] font-mono text-[#8a96a3] shrink-0 pb-1">
-                {items.length} {items.length === 1 ? "item" : "itens"}
+                {itens.length} {itens.length === 1 ? "item" : "itens"}
               </span>
             </div>
 
-            <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-slim snap-x snap-mandatory -mx-1 px-1">
-              {items.map((curso) => (
-                <div key={curso.id} className="w-[240px] md:w-[280px] flex-shrink-0 snap-start">
+            {/* 2 fileiras de cards (sem rolagem lateral) + último card "Ver Todos" com blur */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+              {itens.slice(0, 7).map((curso) => (
+                <div key={curso.id}>
                   <ContentCard
                     id={curso.id}
                     titulo={curso.titulo}
@@ -709,7 +701,6 @@ export default function EscolaFenixView() {
                     lessons={curso.modulos.flatMap((m) => m.aulas)}
                     onClick={() => {
                       setActiveCourse(curso);
-                      // Autoexpand first module
                       setOpenModules({ "0": true });
                       setCurrentModuleIdx(0);
                       setCurrentAulaIdx(0);
@@ -717,6 +708,21 @@ export default function EscolaFenixView() {
                   />
                 </div>
               ))}
+
+              {/* Card "Ver Todos" (último), com blur */}
+              <button
+                onClick={() => setGaleriaSecao(key)}
+                className="relative aspect-[16/10] rounded-2xl border border-white/10 overflow-hidden backdrop-blur-md bg-white/[0.03] hover:bg-[#d12a62]/10 hover:border-[#d12a62]/40 transition-all duration-300 cursor-pointer group flex items-center justify-center"
+                title={`Ver todos os ${label}`}
+              >
+                <div className="absolute inset-0 bg-gradient-to-tr from-[#d12a62]/10 via-transparent to-amber-500/5" />
+                <span className="relative z-10 flex flex-col items-center gap-2 text-center px-4">
+                  <span className="flex items-center justify-center w-10 h-10 rounded-full bg-[#d12a62]/20 border border-[#d12a62]/40 text-[#ff719e] transition-transform group-hover:scale-110">
+                    <ArrowRight className="w-5 h-5" />
+                  </span>
+                  <span className="text-sm sm:text-base font-bold text-white tracking-wide uppercase">Ver Todos</span>
+                </span>
+              </button>
             </div>
           </section>
         );

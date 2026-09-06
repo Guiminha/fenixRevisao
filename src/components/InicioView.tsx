@@ -2,8 +2,8 @@ import React, { useRef, useEffect } from "react";
 import { useStore } from "../store";
 import HeroCarousel from "./HeroCarousel";
 import ContentCard from "./ContentCard";
-import Reveal, { StaggerContainer, StaggerItem } from "./Reveal";
-import { ChevronLeft, ChevronRight, Lock, Sparkles } from "lucide-react";
+import Reveal from "./Reveal";
+import { Lock, Sparkles } from "lucide-react";
 import { Curso, Material, Novidade } from "../types";
 
 export default function InicioView() {
@@ -16,6 +16,8 @@ export default function InicioView() {
     setActiveCourse, 
     loggedIn,
     setSubView,
+    restrictedData,
+    fetchRestrictedData,
     hiddenHomeCardIds = []
   } = useStore();
 
@@ -81,18 +83,33 @@ export default function InicioView() {
       (item.linkType === "pagina" && item.linkTarget === "escola-fenix")
     ) {
       const targetCourseId = item.linkTarget || item.id;
-      const matchedCourse = publicData?.cursos?.find((c: any) => c.id === targetCourseId) || (item.modulos ? item : null);
 
       if (!loggedIn) {
         setActiveView("escola-fenix");
       } else {
-        if (matchedCourse) {
-          setActiveCourse(matchedCourse as Curso);
-        } else if (item.titulo) {
-          setActiveCourse(item as Curso);
+        // Busca o curso COMPLETO (com modulos/aulas) — publicData não expõe modulos.
+        // IMPORTANTE: setActiveView reseta activeCourse, então setamos o curso DEPOIS.
+        const abrir = (completo?: Curso) => {
+          setActiveView("escola-fenix");
+          setSubView("cursos");
+          if (completo) setActiveCourse(completo);
+        };
+        const cursoCompleto = (restrictedData?.cursos || []).find(
+          (c: any) => c.id === targetCourseId || (c.titulo && item.titulo && c.titulo.toLowerCase() === item.titulo.toLowerCase())
+        );
+        if (cursoCompleto) {
+          abrir(cursoCompleto as Curso);
+        } else {
+          // Ainda não carregou os dados restritos: carrega e depois abre o curso.
+          fetchRestrictedData().then(() => {
+            const completo = (useStore.getState().restrictedData?.cursos || []).find(
+              (c: any) => c.id === targetCourseId || (c.titulo && item.titulo && c.titulo.toLowerCase() === item.titulo.toLowerCase())
+            );
+            abrir((completo as Curso) || (item.titulo ? (item as Curso) : undefined));
+          });
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          return;
         }
-        setActiveView("escola-fenix");
-        setSubView("cursos");
       }
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
@@ -165,17 +182,6 @@ export default function InicioView() {
     // Default fallback to courses view
     setActiveView("escola-fenix");
     window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  // Helper: horizontal scroll action
-  const scrollContainer = (ref: React.RefObject<HTMLDivElement | null>, direction: "left" | "right") => {
-    if (ref.current) {
-      const scrollAmount = 550;
-      ref.current.scrollBy({
-        left: direction === "left" ? -scrollAmount : scrollAmount,
-        behavior: "smooth"
-      });
-    }
   };
 
   if (!publicData) {
@@ -314,66 +320,53 @@ export default function InicioView() {
     if (list.length === 0) return null;
 
     return (
-      <Reveal direction="up" className="relative group/row space-y-3 pt-2">
+      <Reveal direction="up" className="relative group/row space-y-9 pt-6 border-t border-white/5">
+        {/* Separador sutil de seção */}
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[#d12a62]/30 to-transparent -translate-y-1/2" />
         {/* Row Header */}
-        <div className="flex items-center justify-between px-1 mb-2">
-          <h2 className="text-lg md:text-xl font-bold tracking-tight text-[#f1f5f9]">
-            {title}
-          </h2>
-          {viewAllAction && (
-            <button
-              onClick={viewAllAction}
-              className="text-[#d12a62] text-[10px] uppercase tracking-widest border border-[#d12a62]/20 hover:bg-[#d12a62]/5 transition-all px-3 py-1 rounded-full font-mono font-bold"
-            >
-              Ver todos →
-            </button>
-          )}
+        <div className="flex items-center justify-between gap-3 px-1 mb-3">
+          <div className="relative w-full sm:w-[50%] rounded-r-full py-2 pl-2 pr-4 min-w-0">
+            <div className="absolute inset-0 bg-gradient-to-r from-[#d12a62]/40 via-[#d12a62]/20 to-transparent rounded-r-full" />
+            <h2 className="relative text-2xl md:text-3xl font-bold tracking-tight text-[#f1f5f9] uppercase flex items-center gap-2.5 whitespace-normal">
+              <span className="w-1 h-5 md:h-6 bg-[#d12a62] rounded-full inline-block shrink-0" />
+              {title}
+            </h2>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-[10px] font-mono text-[#8a96a3] shrink-0">
+              {list.length} {list.length === 1 ? "item" : "itens"}
+            </span>
+            {viewAllAction && (
+              <button
+                onClick={viewAllAction}
+                className="text-[#d12a62] text-[10px] uppercase tracking-widest border border-[#d12a62]/20 hover:bg-[#d12a62]/5 transition-all px-3 py-1 rounded-full font-mono font-bold"
+              >
+                Ver todos →
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Carousel Tracks with Left/Right arrows on Desktop hover */}
-        <div className="relative">
-          {/* Left Arrow Button */}
-          <button
-            onClick={() => scrollContainer(containerRef, "left")}
-            className="absolute left-1 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/80 hover:bg-black border border-white/10 text-white flex items-center justify-center opacity-0 group-hover/row:opacity-100 z-20 transition-opacity pointer-events-auto hidden md:flex"
-          >
-            <ChevronLeft className="w-5 h-5 text-[#f1f5f9]" />
-          </button>
-
-          {/* Slider Rail */}
-          <div
-            ref={containerRef as any}
-            className="flex items-stretch gap-3 sm:gap-5 overflow-x-auto scroll-smooth scrollbar-hide py-3 px-1 snap-x snap-mandatory"
-          >
-            <StaggerContainer className="flex items-stretch gap-3 sm:gap-5" stagger={0.07}>
-              {list.map((item, index) => (
-                <StaggerItem key={`${item.contentType || type}-${item.id}`} className="w-[220px] sm:w-[260px] md:w-[340px] lg:w-[360px] flex-shrink-0 snap-start transition-all duration-300 hover:scale-[1.01]">
-                  <ContentCard
-                    id={item.id}
-                    titulo={item.titulo}
-                    imagem={item.imagem || item.thumbnail}
-                    categoria={item.displayCategory || item.categoria}
-                    tipo={item.displayType || type}
-                    isPremium={item.isPremium}
-                    isNew={index < 3 || item.isNew}
-                    duracao={item.duracao}
-                    lessons={item.modulos ? item.modulos.flatMap((m: any) => m.aulas) : []}
-                    professorNome={item.professorNome}
-                    professorFoto={item.professorFoto}
-                    onClick={() => handleCardClick(item, item.displayType || type)}
-                  />
-                </StaggerItem>
-              ))}
-            </StaggerContainer>
-          </div>
-
-          {/* Right Arrow Button */}
-          <button
-            onClick={() => scrollContainer(containerRef, "right")}
-            className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/80 hover:bg-black border border-white/10 text-white flex items-center justify-center opacity-0 group-hover/row:opacity-100 z-20 transition-opacity pointer-events-auto hidden md:flex"
-          >
-            <ChevronRight className="w-5 h-5 text-[#f1f5f9]" />
-          </button>
+        {/* Grid de 3 fileiras (sem rolagem lateral) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
+          {list.slice(0, 12).map((item, index) => (
+            <div key={`${item.contentType || type}-${item.id}`} className="transition-all duration-300 hover:scale-[1.01]">
+              <ContentCard
+                id={item.id}
+                titulo={item.titulo}
+                imagem={item.imagem || item.thumbnail}
+                categoria={item.displayCategory || item.categoria}
+                tipo={item.displayType || type}
+                isPremium={item.isPremium}
+                isNew={index < 3 || item.isNew}
+                duracao={item.duracao}
+                lessons={item.modulos ? item.modulos.flatMap((m: any) => m.aulas) : []}
+                professorNome={item.professorNome}
+                professorFoto={item.professorFoto}
+                onClick={() => handleCardClick(item, item.displayType || type)}
+              />
+            </div>
+          ))}
         </div>
       </Reveal>
     );
@@ -389,7 +382,7 @@ export default function InicioView() {
       />
 
       {/* 2. Horizontal Rows */}
-      <div className="space-y-8 sm:space-y-10 px-4 sm:px-6 lg:px-10 pt-4 sm:pt-6">
+      <div className="space-y-12 sm:space-y-16 px-4 sm:px-6 lg:px-10 pt-4 sm:pt-6">
         {allContents.length === 0 ? (
           <div className="text-center py-16 px-6 rounded-2xl border border-dashed border-white/10 bg-white/[0.01] max-w-2xl mx-auto my-6">
             <div className="w-12 h-12 rounded-2xl bg-[#d12a62]/10 border border-[#d12a62]/20 flex items-center justify-center text-[#ff719e] mx-auto mb-4">

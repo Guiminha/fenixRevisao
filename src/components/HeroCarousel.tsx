@@ -176,7 +176,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
       <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent z-15 pointer-events-none" />
 
       {/* Slide Content Overlay */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full max-w-[88%] sm:max-w-[60%] lg:max-w-[45%] animate-fade-in pb-10 sm:pb-8">
+      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full max-w-[60%] animate-fade-in pb-10 sm:pb-8">
         <motion.div
           key={currentSlide.id + "-" + safeIndex}
           initial="hidden"
@@ -188,7 +188,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
           }}
         >
           <motion.div
-            className="flex flex-wrap items-center gap-2 mb-2 md:mb-3"
+            className="flex flex-wrap items-center justify-start gap-2 mb-2 md:mb-3"
             variants={{
               hidden: { opacity: 0, y: 16 },
               visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } },
@@ -209,7 +209,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
           {/* Title */}
           <motion.h1
             id={`hero-slide-title-${currentSlide.id}`}
-            className="text-[clamp(1.5rem,4vw,4.5rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[1.02] drop-shadow-md"
+            className="text-[clamp(1rem,3.5vw,7rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[1.02] drop-shadow-md break-words line-clamp-2"
             style={{ color: (currentSlide as Banner).corTitulo || "#ffffff" }}
             variants={{
               hidden: { opacity: 0, y: 24 },
@@ -221,7 +221,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Description */}
           <motion.p
-            className="text-[clamp(0.9rem,1.5vw,1.6rem)] mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium"
+            className="text-[clamp(0.8rem,1.5vw,2.5rem)] mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium line-clamp-3"
             style={{ color: (currentSlide as Banner).corDescricao || "#ffffff" }}
             variants={{
               hidden: { opacity: 0, y: 18 },
@@ -233,7 +233,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Actions */}
           <motion.div
-            className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 md:gap-4 w-full sm:w-auto"
+            className="flex flex-col sm:flex-row items-stretch sm:items-center justify-start gap-2.5 md:gap-4 w-full sm:w-auto"
             variants={{
               hidden: { opacity: 0, y: 16 },
               visible: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
@@ -248,7 +248,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
                     {(currentSlide as Banner).btn1Texto && (currentSlide as Banner).btn1Tipo !== "nenhum" && (
                       <button
                         onClick={() => handleBannerButtonClick((currentSlide as Banner).btn1Tipo, (currentSlide as Banner).btn1Destino)}
-                        className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-[#d12a62] hover:bg-[#b02251] text-white text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest font-extrabold flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer transition-all duration-300 hover:scale-[1.01] w-full sm:w-auto shadow-lg shadow-[#d12a62]/20 border border-transparent"
+                        className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-[#d12a62] hover:bg-[#b02251] text-white text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest font-extrabold flex items-center justify-center gap-1.5 sm:gap-2 cursor-pointer transition-colors duration-300 whitespace-nowrap shrink-0 sm:w-auto w-full shadow-lg shadow-[#d12a62]/20 border border-transparent"
                       >
                         {(currentSlide as Banner).btn1Tipo === "externo" && <ArrowUpRight className="w-3.5 h-3.5" />}
                         {(currentSlide as Banner).btn1Texto}
@@ -259,7 +259,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
                     {(currentSlide as Banner).btn2Texto && (currentSlide as Banner).btn2Tipo !== "nenhum" && (
                       <button
                         onClick={() => handleBannerButtonClick((currentSlide as Banner).btn2Tipo, (currentSlide as Banner).btn2Destino)}
-                        className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/[0.08] text-[#f1f5f9] font-bold text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest flex items-center justify-center gap-1.5 sm:gap-2 transition-all duration-300 w-full sm:w-auto backdrop-blur-md cursor-pointer"
+                        className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/[0.08] text-[#f1f5f9] font-bold text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest flex items-center justify-center gap-1.5 sm:gap-2 transition-colors duration-300 whitespace-nowrap shrink-0 sm:w-auto w-full backdrop-blur-md cursor-pointer"
                       >
                         {(currentSlide as Banner).btn2Tipo === "externo" && <ArrowUpRight className="w-3.5 h-3.5" />}
                         {(currentSlide as Banner).btn2Texto}
@@ -274,7 +274,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
                 <button
                   id={`hero-watch-btn-${currentSlide.id}`}
                   onClick={() => onPlayClick && onPlayClick(currentSlide as Novidade)}
-                  className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-[#d12a62]/10 hover:bg-[#d12a62] text-[#d12a62] hover:text-[#07090e] border border-[#d12a62]/30 hover:border-transparent backdrop-blur-md text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest font-extrabold flex items-center justify-center gap-1.5 sm:gap-2.5 cursor-pointer transition-all duration-300 hover:scale-[1.01] w-full sm:w-auto shadow-lg shadow-[#d12a62]/5"
+                  className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-[#d12a62]/10 hover:bg-[#d12a62] text-[#d12a62] hover:text-[#07090e] border border-[#d12a62]/30 hover:border-transparent backdrop-blur-md text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest font-extrabold flex items-center justify-center gap-1.5 sm:gap-2.5 cursor-pointer transition-colors duration-300 whitespace-nowrap shrink-0 sm:w-auto w-full shadow-lg shadow-[#d12a62]/5"
                 >
                   <Play className="w-3.5 h-3.5 md:w-4 md:h-4 fill-current" />
                   Assistir agora
@@ -282,7 +282,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
                 <button
                   id={`hero-info-btn-${currentSlide.id}`}
                   onClick={() => onInfoClick && onInfoClick(currentSlide as Novidade)}
-                  className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/[0.08] text-[#f1f5f9] font-bold text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest flex items-center justify-center gap-1.5 sm:gap-2.5 transition-all duration-300 w-full sm:w-auto backdrop-blur-md cursor-pointer"
+                  className="h-8 sm:h-10 md:h-12 px-4 sm:px-6 md:px-8 rounded-lg sm:rounded-xl bg-white/[0.04] hover:bg-white/10 border border-white/[0.08] text-[#f1f5f9] font-bold text-[clamp(0.625rem,0.8vw,0.875rem)] uppercase tracking-widest flex items-center justify-center gap-1.5 sm:gap-2.5 transition-colors duration-300 whitespace-nowrap shrink-0 sm:w-auto w-full backdrop-blur-md cursor-pointer"
                 >
                   <Info className="w-4 h-4 md:w-4.5 md:h-4.5 text-[#94a3b8]" />
                   Saiba mais

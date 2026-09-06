@@ -1253,14 +1253,23 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
 
         if (upsertErr) {
           if (upsertErr.code === "42501" || upsertErr.message?.includes("permission denied")) {
-            // Silently persist locally without cluttering server logs
+            // Sem grant de escrita (RLS/role): mantém o dado apenas em memória local
+            // para não interromper a sessão — mas registra em log interno.
+            console.warn("[Supabase] saveCurso sem permissão de escrita:", upsertErr.message || upsertErr);
           } else {
-            console.warn("[Supabase] saveCurso upsert:", upsertErr.message || upsertErr);
+            // Propaga o erro real (coluna inexistente, schema, rede...) para o endpoint
+            // retornar falha em vez de "falso sucesso".
+            throw new Error(`Falha ao gravar curso no Supabase: ${upsertErr.message || upsertErr}`);
           }
         } else {
           await this.addAuditLog(user, acao, detalhes, userToken);
         }
       } catch (err) {
+        // Se for erro de validação/gravação real, re-lança (o endpoint retorna 500).
+        // Erros internos de auditoria/log NÃO interrompem a gravação já concluída.
+        if (err instanceof Error && /gravar curso|supabase/i.test(err.message)) {
+          throw err;
+        }
         console.error("[Supabase] saveCurso falhou:", err);
       }
     }

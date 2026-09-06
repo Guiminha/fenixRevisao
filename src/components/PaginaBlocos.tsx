@@ -100,12 +100,12 @@ export default function PaginaBlocos({
             <div className="absolute top-0 right-0 -mt-24 -mr-24 w-[28rem] h-[28rem] rounded-full bg-[#d12a62]/10 blur-3xl pointer-events-none" />
             <div className="relative z-10 max-w-4xl mx-auto text-center space-y-6">
               {/* Título em caixa alta (remove traço residual " — " do dado, se houver) */}
-              <h1 className="text-[clamp(1.4rem,3.9vw,4.55rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] whitespace-normal md:whitespace-nowrap">
+              <h1 className="text-[clamp(1.4rem,4vw,9rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] break-words">
                 {(campos.titulo || "").replace(/\s*[—–-]\s*$/, "").trim()}
               </h1>
               {/* Subtítulo logo abaixo do título */}
               {campos.tituloDestaque && (
-                <p className="text-[clamp(1.43rem,2.34vw,2.08rem)] font-semibold bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent">
+                <p className="text-[clamp(1.43rem,2.2vw,4.5rem)] font-semibold bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent">
                   {campos.tituloDestaque}
                 </p>
               )}
@@ -143,7 +143,7 @@ export default function PaginaBlocos({
         return (
           <section key={bloco.id} className={fullBleedTop ? `${FULL_BLEED} bg-[#07090e]` : "relative overflow-hidden rounded-[2rem] bg-[#07090e]"}>
             {campos.imagem ? (
-              <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[300px]">
+              <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[320px]">
                 <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-cover object-top" />
                 {!coverSemTexto && (
                   <>
@@ -155,7 +155,7 @@ export default function PaginaBlocos({
                         </span>
                       )}
                       {campos.titulo && (
-                        <h1 className="mt-4 text-[clamp(1.75rem,3.6vw,5rem)] font-black text-white font-display tracking-tight leading-[1.05] drop-shadow-lg">
+                        <h1 className="mt-4 text-[clamp(1.75rem,3.6vw,9rem)] font-black text-white font-display tracking-tight leading-[1.05] drop-shadow-lg">
                           {campos.titulo}{" "}
                           {campos.tituloDestaque && (
                             <span className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_18px_rgba(251,191,36,0.25)]">{campos.tituloDestaque}</span>
@@ -177,7 +177,7 @@ export default function PaginaBlocos({
                     <span className="inline-flex items-center px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[clamp(0.625rem,0.8vw,0.875rem)] font-mono font-bold tracking-widest uppercase">{campos.badge}</span>
                   )}
                   {campos.titulo && (
-                    <h1 className="mt-4 text-[clamp(1.75rem,3.6vw,5rem)] font-black text-white font-display tracking-tight">
+                    <h1 className="mt-4 text-[clamp(1.75rem,3.6vw,9rem)] font-black text-white font-display tracking-tight">
                       {campos.titulo} <span className="bg-gradient-to-r from-amber-200 to-amber-500 bg-clip-text text-transparent">{campos.tituloDestaque}</span>
                     </h1>
                   )}
@@ -203,7 +203,7 @@ export default function PaginaBlocos({
               )}
               <div className="space-y-3">
                 {campos.eyebrow && <span className={`text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block ${cor.fg}`}>{campos.eyebrow}</span>}
-                <h2 className="text-[clamp(1.75rem,3.2vw,3.5rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h2>
+                <h2 className="text-[clamp(1.75rem,3.2vw,6rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h2>
                 {textos.map((t, i) => (
                   <p key={i} className="text-[clamp(1rem,1.5vw,1.25rem)] max-w-2xl mx-auto text-slate-300 leading-relaxed">{t}</p>
                 ))}
@@ -227,7 +227,7 @@ export default function PaginaBlocos({
                   )}
                   <div className="space-y-1">
                     {campos.eyebrow && <span className={`text-[clamp(0.75rem,1vw,0.9rem)] font-bold uppercase tracking-[0.2em] block ${cor.fg}`}>{campos.eyebrow}</span>}
-                    {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h3>}
+                    {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,5rem)] font-bold text-white font-display tracking-tight leading-[1.1]">{campos.titulo}</h3>}
                   </div>
                 </div>
                 {textos.map((t, i) => (
@@ -263,7 +263,7 @@ export default function PaginaBlocos({
             <FundoDecorativo cor="dourado" />
             <div className="relative z-10 space-y-4">
               {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-amber-400">{campos.eyebrow}</span>}
-              {campos.titulo && <h2 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-extrabold font-display text-white tracking-tight">{campos.titulo}</h2>}
+              {campos.titulo && <h2 className="text-[clamp(1.5rem,2.8vw,5rem)] font-extrabold font-display text-white tracking-tight">{campos.titulo}</h2>}
               {textos.map((t, i) => (
                 <p key={i} className="text-[clamp(1rem,1.5vw,1.25rem)] leading-relaxed text-slate-300">{t}</p>
               ))}
@@ -293,7 +293,7 @@ export default function PaginaBlocos({
             <div className="relative z-10 space-y-6">
               <div className="space-y-2">
                 {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-[#ff719e]">{campos.eyebrow}</span>}
-                {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
+                {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,5rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
               </div>
               <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4 text-left">
                 {(campos.itens || []).map((item, i) => (
@@ -314,7 +314,7 @@ export default function PaginaBlocos({
             <div className="relative z-10 space-y-6">
               <div className="space-y-2">
                 {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-[#ff719e]">{campos.eyebrow}</span>}
-                {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,2.75rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
+                {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,5rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
               </div>
               <div className="divide-y divide-white/[0.06] text-left max-w-3xl mx-auto">
                 {(campos.faq || []).map((item, i) => (
@@ -337,7 +337,7 @@ export default function PaginaBlocos({
             <FundoDecorativo cor="dourado" />
             <div className="relative z-10 max-w-4xl mx-auto space-y-4">
               {campos.destaqueTitulo && (
-                <h3 className="text-[clamp(1.75rem,3.2vw,3.5rem)] font-black font-display bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent tracking-tight">{campos.destaqueTitulo}</h3>
+                <h3 className="text-[clamp(1.75rem,3.2vw,6rem)] font-black font-display bg-gradient-to-r from-amber-200 via-amber-300 to-amber-500 bg-clip-text text-transparent tracking-tight">{campos.destaqueTitulo}</h3>
               )}
               {campos.destaqueTexto && <p className="text-[clamp(1rem,1.5vw,1.35rem)] text-slate-200 font-medium leading-relaxed max-w-3xl mx-auto">{campos.destaqueTexto}</p>}
             </div>
@@ -355,7 +355,7 @@ export default function PaginaBlocos({
                   {campos.badge}
                 </span>
               )}
-              {campos.titulo && <h2 className="text-[clamp(1.75rem,3.2vw,3.5rem)] font-extrabold text-white font-display leading-tight">{campos.titulo}</h2>}
+              {campos.titulo && <h2 className="text-[clamp(1.75rem,3.2vw,6rem)] font-extrabold text-white font-display leading-tight">{campos.titulo}</h2>}
               {textos.map((t, i) => (
                 <p key={i} className="text-[clamp(1rem,1.5vw,1.2rem)] text-slate-300 leading-relaxed font-light">{t}</p>
               ))}
@@ -393,7 +393,7 @@ export default function PaginaBlocos({
         </div>
         <div className="relative z-10">
           {topoFullBleed && renderBloco(topo, 0, true)}
-          <div className={`max-w-5xl mx-auto space-y-12 sm:space-y-16 px-4 sm:px-6${topoFullBleed ? " mt-10" : " pt-6 sm:pt-10"}`}>
+          <div className={`max-w-5xl mx-auto space-y-12 sm:space-y-16 px-4 sm:px-6 xl:max-w-6xl 2xl:max-w-7xl min-[2200px]:max-w-[90rem]${topoFullBleed ? " mt-10" : " pt-6 sm:pt-10"}`}>
             {resto.map((bloco, idx) => renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false))}
           </div>
         </div>

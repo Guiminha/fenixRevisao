@@ -49,7 +49,7 @@ export function formatDuration(seconds: number): string {
 export function constructProtectedEmbedUrl(videoId: string, hash?: string): string {
   const hQuery = hash ? `h=${hash}&` : "";
   // Anti-redirect & clean embed parameters for Vimeo Player
-  return `https://player.vimeo.com/video/${videoId}?${hQuery}title=0&byline=0&portrait=0&badge=0&autopause=0&player_id=0&app_id=58479&transparent=0&dnt=1`;
+  return `https://player.vimeo.com/video/${videoId}?${hQuery}title=0&byline=0&portrait=0&badge=0&autopause=0&player_id=0&app_id=58479&transparent=0&dnt=1&color=d12a62&playsinline=1`;
 }
 
 export function extractVimeoHash(url: string): string {

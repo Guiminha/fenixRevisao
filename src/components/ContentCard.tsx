@@ -130,7 +130,10 @@ export default function ContentCard({
             {categoria}
           </span>
           {/* Title */}
-          <h3 className="text-[13px] sm:text-[15px] font-semibold text-[#f1f5f9] leading-snug group-hover:text-[#d12a62] transition-colors line-clamp-2">
+          <h3
+            title={titulo}
+            className="text-[13px] sm:text-[15px] font-semibold text-[#f1f5f9] leading-snug group-hover:text-[#d12a62] transition-colors line-clamp-2 break-words"
+          >
             {titulo}
           </h3>
 
@@ -178,9 +181,9 @@ export default function ContentCard({
             
             <button
               type="button"
-              className="w-full bg-white/[0.03] hover:bg-[#d12a62]/10 text-white hover:text-[#d12a62] border border-white/[0.05] hover:border-[#d12a62]/30 py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all duration-300 flex items-center justify-center gap-1.5 cursor-pointer backdrop-blur-md shadow-sm"
+              className="w-full bg-[#d12a62]/10 hover:bg-[#d12a62] text-[#ff719e] hover:text-white border border-[#d12a62]/30 hover:border-[#d12a62] py-2.5 rounded-xl text-xs font-bold tracking-wide transition-all duration-300 flex items-center justify-center gap-1.5 cursor-pointer backdrop-blur-md shadow-sm"
             >
-              <span>Assistir Curso</span>
+              <span>Assistir</span>
               <span className="text-xs transition-transform group-hover:translate-x-0.5">→</span>
             </button>
           </div>
