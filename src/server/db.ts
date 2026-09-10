@@ -2015,11 +2015,19 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
         } else {
           banners.push(banner);
         }
-        await Promise.all([
-          client.from("config").upsert({ key: "banners", value: banners }),
-          this.addAuditLog(user, index >= 0 ? "EDITAR_BANNER" : "CRIAR_BANNER", `Banner ${index >= 0 ? "editado" : "criado"}: ${banner.titulo}`, userToken)
-        ]);
+        const { error: upErr } = await client.from("config").upsert({ key: "banners", value: banners });
+        if (upErr) {
+          if (upErr.code === "42501" || /permission denied/i.test(upErr.message || "")) {
+            console.warn("[Supabase] saveBanner sem permissão de escrita:", upErr.message);
+            throw new Error(`Sem permissão para gravar banners no Supabase: ${upErr.message}`);
+          }
+          throw new Error(`Falha ao gravar banner no Supabase: ${upErr.message}`);
+        }
+        await this.addAuditLog(user, index >= 0 ? "EDITAR_BANNER" : "CRIAR_BANNER", `Banner ${index >= 0 ? "editado" : "criado"}: ${banner.titulo}`, userToken);
       } catch (err) {
+        if (err instanceof Error && /gravar banner|permissão para gravar banners/i.test(err.message)) {
+          throw err;
+        }
         console.error("[Supabase] saveBanner falhou:", err);
       }
     }
@@ -2064,11 +2072,19 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
       try {
         const freshData = await this.getData(userToken);
         const banners = (freshData.banners || []).filter((b) => b.id !== id);
-        await Promise.all([
-          client.from("config").upsert({ key: "banners", value: banners }),
-          this.addAuditLog(user, "DELETAR_BANNER", item ? `Banner deletado: ${item.titulo}` : `Banner deletado: ${id}`, userToken)
-        ]);
+        const { error: upErr } = await client.from("config").upsert({ key: "banners", value: banners });
+        if (upErr) {
+          if (upErr.code === "42501" || /permission denied/i.test(upErr.message || "")) {
+            console.warn("[Supabase] deleteBanner sem permissão de escrita:", upErr.message);
+          } else {
+            throw new Error(`Falha ao gravar banner no Supabase: ${upErr.message}`);
+          }
+        }
+        await this.addAuditLog(user, "DELETAR_BANNER", item ? `Banner deletado: ${item.titulo}` : `Banner deletado: ${id}`, userToken);
       } catch (err) {
+        if (err instanceof Error && /gravar banner/i.test(err.message)) {
+          throw err;
+        }
         console.error("[Supabase] deleteBanner falhou:", err);
       }
     }

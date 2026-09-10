@@ -1631,7 +1631,7 @@ app.post("/api/admin/cursos", requireAdmin, async (req: any, res) => {
       professorEspecialidade: cleanText(professorEspecialidade),
       professorBio: cleanText(professorBio),
       professorFoto: safeLinkTarget(professorFoto),
-      createdAt: req.body.createdAt || new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       secao: (secao === "series" || secao === "treinamentos" ? secao : "cursos") as Curso["secao"]
     };
 

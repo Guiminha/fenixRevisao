@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Novidade, Banner, ViewType } from "../types";
 import { Play, Info, ArrowUpRight } from "lucide-react";
 import { useStore } from "../store";
@@ -11,6 +11,24 @@ interface HeroCarouselProps {
 }
 
 const FALLBACK_HERO = "/uploads/hero_phoenix_city_1785160165470.jpg";
+
+// Reduz a fonte até o texto caber sem cortar. Retorna o size em px a aplicar.
+function fitText(el: HTMLElement | null, minPx: number, maxPx: number): number {
+  if (!el) return maxPx;
+  el.style.fontSize = maxPx + "px";
+  // white-space normal + word-break já permitem quebrar; reduzimos enquanto:
+  //   - a altura estourar (muitas linhas) OU a largura estourar
+  let size = maxPx;
+  let guard = 0;
+  while (size > minPx && guard < 200) {
+    const overHeight = el.scrollHeight > el.clientHeight + 2;
+    if (!overHeight) break;
+    size -= 1;
+    el.style.fontSize = size + "px";
+    guard++;
+  }
+  return size;
+}
 
 // Imagem de slide com fallback controlado por estado — evita o loop de
 // requisições que acontecia quando o onError mutava o src via setAttribute
@@ -53,6 +71,10 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   } = useStore();
 
   const [currentIndex, setCurrentIndex] = useState(0);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const descRef = useRef<HTMLParagraphElement>(null);
+  const [titleSize, setTitleSize] = useState<number | null>(null);
+  const [descSize, setDescSize] = useState<number | null>(null);
 
   const isSlideValid = (slide: any) => {
     if (!slide) return false;
@@ -75,6 +97,31 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
     }, 7000); // 7s autoplay
     return () => clearInterval(interval);
   }, [activeSlides]);
+
+  const _safeIndex = currentIndex < activeSlides.length ? currentIndex : 0;
+  const _currentSlide = activeSlides[_safeIndex] || activeSlides[0];
+
+  // Ajusta o tamanho da fonte de forma fluida (sem cortar nada), com hierarquia fixa:
+  // o título é sempre 1.8x o tamanho da descrição. Ambos quebram naturalmente.
+  useLayoutEffect(() => {
+    const vw = window.innerWidth;
+    // Descrição (referência): clamp(0.7rem, 1.05vw, 1.25rem) -> min 11, max 20
+    const descPx = Math.min(20, Math.max(11, 1.05 * vw / 100));
+    setDescSize(descPx);
+    setTitleSize(Math.round(descPx * 1.8));
+  }, [_currentSlide]);
+
+  const handleResize = () => {
+    const vw = window.innerWidth;
+    const descPx = Math.min(20, Math.max(11, 1.05 * vw / 100));
+    setDescSize(descPx);
+    setTitleSize(Math.round(descPx * 1.8));
+  };
+
+  useEffect(() => {
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   if (!activeSlides || activeSlides.length === 0) {
     return (
@@ -208,9 +255,10 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Title */}
           <motion.h1
+            ref={titleRef}
             id={`hero-slide-title-${currentSlide.id}`}
-            className="text-[clamp(1rem,3.5vw,7rem)] font-bold tracking-tighter mb-2 md:mb-4 leading-[1.05] md:leading-[1.02] drop-shadow-md break-words line-clamp-2"
-            style={{ color: (currentSlide as Banner).corTitulo || "#ffffff" }}
+            className="font-bold tracking-tighter mb-2 md:mb-4 leading-[1.15] drop-shadow-md break-words"
+            style={{ color: (currentSlide as Banner).corTitulo || "#ffffff", fontSize: titleSize ? `${titleSize}px` : undefined }}
             variants={{
               hidden: { opacity: 0, y: 24 },
               visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] } },
@@ -221,8 +269,9 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
           {/* Description */}
           <motion.p
-            className="text-[clamp(0.8rem,1.5vw,2.5rem)] mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium line-clamp-3"
-            style={{ color: (currentSlide as Banner).corDescricao || "#ffffff" }}
+            ref={descRef}
+            className="mb-4 md:mb-8 leading-relaxed italic drop-shadow-sm font-medium break-words"
+            style={{ color: (currentSlide as Banner).corDescricao || "#ffffff", fontSize: descSize ? `${descSize}px` : undefined }}
             variants={{
               hidden: { opacity: 0, y: 18 },
               visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] } },

@@ -13,7 +13,8 @@ export default function InicioView() {
     fenixPosts,
     fetchFenixPosts,
     setActiveView, 
-    setActiveCourse, 
+    setActiveCourse,
+    setPendingCourse,
     loggedIn,
     setSubView,
     restrictedData,
@@ -85,6 +86,8 @@ export default function InicioView() {
       const targetCourseId = item.linkTarget || item.id;
 
       if (!loggedIn) {
+        // Preserva o curso alvo para abrir direto após o login.
+        setPendingCourse(targetCourseId);
         setActiveView("escola-fenix");
       } else {
         // Busca o curso COMPLETO (com modulos/aulas) — publicData não expõe modulos.
@@ -167,6 +170,7 @@ export default function InicioView() {
     if (targetCourseId) {
       const matchedCourse = publicData?.cursos?.find((c: any) => c.id === targetCourseId);
       if (!loggedIn) {
+        setPendingCourse(targetCourseId);
         setActiveView("escola-fenix");
       } else {
         if (matchedCourse) {
@@ -294,7 +298,12 @@ export default function InicioView() {
 
   // Novidades section displays all published site content, ordered by newest first
   const novidadesList = [...allContents].sort((a, b) => b.sortDate - a.sortDate);
-  const cursosList = sortByNewest(cursos.filter(isCardVisibleOnHome)).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const }));
+  const cursosList = sortByNewest(
+    cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "cursos" || (!c.secao && c.categoria !== "Séries" && c.categoria !== "Treinamentos")))
+  ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Curso" }));
+  const seriesList = sortByNewest(
+    cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "series" || c.categoria === "Séries"))
+  ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Série" }));
   const materiaisList = sortByNewest(materiais.filter(isCardVisibleOnHome)).map((m) => ({
     ...m,
     imagem: m.thumbnail || m.imagem,
@@ -407,6 +416,17 @@ export default function InicioView() {
               list={cursosList}
               type="course"
               containerRef={refs.cursos}
+              viewAllAction={() => {
+                setActiveView("escola-fenix");
+                setSubView("cursos");
+              }}
+            />
+
+            <CarouselRow
+              title="Séries em Destaque"
+              list={seriesList}
+              type="course"
+              containerRef={refs.recomendados}
               viewAllAction={() => {
                 setActiveView("escola-fenix");
                 setSubView("cursos");

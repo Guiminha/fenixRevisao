@@ -28,6 +28,7 @@ interface PlatformState {
   activeView: ViewType;
   subView: SubViewType;
   activeCourse: Curso | null;
+  pendingCourseId: string | null;
   adminActiveTab: AdminTabType;
 
   // Authentication
@@ -79,6 +80,7 @@ interface PlatformState {
   setActiveView: (view: ViewType) => void;
   setSubView: (subView: SubViewType) => void;
   setActiveCourse: (course: Curso | null) => void;
+  setPendingCourse: (courseId: string | null) => void;
   setAdminActiveTab: (tab: AdminTabType) => void;
 
   // Auth Actions
@@ -201,6 +203,7 @@ export const useStore = create<PlatformState>((set, get) => {
     activeView: "inicio",
     subView: "cursos",
     activeCourse: null,
+    pendingCourseId: null,
     adminActiveTab: "dashboard",
 
     // Auth
@@ -270,6 +273,7 @@ export const useStore = create<PlatformState>((set, get) => {
     setActiveView: (view) => set({ activeView: view, activeCourse: null }),
     setSubView: (subView) => set({ subView }),
     setActiveCourse: (course) => set({ activeCourse: course }),
+    setPendingCourse: (courseId) => set({ pendingCourseId: courseId }),
     setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
     // Auth Actions
@@ -523,6 +527,13 @@ export const useStore = create<PlatformState>((set, get) => {
                 const updated = data.cursos.find((c: Curso) => c.id === active.id);
                 if (updated) {
                   set({ activeCourse: updated });
+                }
+              }
+              const pendingId = get().pendingCourseId;
+              if (pendingId) {
+                const pendente = data.cursos.find((c: Curso) => c.id === pendingId);
+                if (pendente) {
+                  set({ activeCourse: pendente, pendingCourseId: null });
                 }
               }
               return;
@@ -1044,15 +1055,17 @@ export const useStore = create<PlatformState>((set, get) => {
               body: JSON.stringify(banner)
             });
             const contentType = res.headers.get("content-type") || "";
-            if (res.ok && contentType.includes("application/json")) {
+            if (contentType.includes("application/json")) {
               const data = await res.json();
-              if (data.success) {
+              if (res.ok && data.success) {
                 await get().fetchPublicData();
                 await get().fetchAdminData();
                 return { success: true };
               } else {
-                return { success: false, error: data.error };
+                return { success: false, error: data.error || `Erro ao salvar banner (HTTP ${res.status}).` };
               }
+            } else if (!res.ok) {
+              return { success: false, error: `Erro ao salvar banner (HTTP ${res.status}).` };
             }
           } catch (e) {
             console.warn("saveBanner server fetch error:", e);
