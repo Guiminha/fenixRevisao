@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { UploadProgressBar, UploadProgressState } from "./UploadProgressBar";
 import { uploadFileWithProgress } from "../utils/uploadWithProgress";
 import { useStore } from "../store";
@@ -321,10 +321,10 @@ export default function AdminView() {
     });
   };
 
-  // --- STATUS DAS INTEGRAÇÕES (MinIO + Vimeo) ---
+  // --- STATUS DAS INTEGRAÇÕES (Supabase Storage + Vimeo) ---
   // As credenciais NÃO são editáveis nem exibidas no painel: vivem em variáveis
-  // de ambiente (MINIO_*/VIMEO_*) ou no config do banco. Aqui só há STATUS.
-  const [integrationsStatus, setIntegrationsStatus] = useState<{ minio: any; vimeo: any } | null>(null);
+  // de ambiente (SUPABASE_*/VIMEO_*). Aqui só há STATUS.
+  const [integrationsStatus, setIntegrationsStatus] = useState<{ storage: any; vimeo: any } | null>(null);
   const [integrationsLoading, setIntegrationsLoading] = useState(false);
   const [integrationCheckId, setIntegrationCheckId] = useState(0);
   const [fetchingVimeoLessonId, setFetchingVimeoLessonId] = useState<string | null>(null);
@@ -475,8 +475,8 @@ export default function AdminView() {
         headers: getAuthHeaders()
       });
       const data = await res.json();
-      if (res.ok && data && data.minio) {
-        setIntegrationsStatus({ minio: data.minio, vimeo: data.vimeo });
+      if (res.ok && data && data.storage) {
+        setIntegrationsStatus({ storage: data.storage, vimeo: data.vimeo });
       } else {
         setIntegrationsStatus(null);
       }
@@ -939,7 +939,7 @@ export default function AdminView() {
         totalObjetos: data.totalObjetos ?? 0
       });
       if (data.ausentes?.length > 0) {
-        triggerNotification("error", `Integridade: ${data.ausentes.length} mídia(s) citada(s) no site estão AUSENTES do MinIO.`);
+        triggerNotification("error", `Integridade: ${data.ausentes.length} mídia(s) citada(s) no site estão AUSENTES do Supabase Storage.`);
       } else {
         triggerNotification("success", `Integridade OK: ${data.presentes}/${data.totalReferenciadas} mídias presentes.`);
       }
@@ -1483,7 +1483,7 @@ export default function AdminView() {
       const res = await uploadFileWithProgress(file, "banners", getAuthHeaders());
       if (res && res.success && (res.previewUrl || res.url)) {
         setBannerImagem(res.previewUrl || res.url);
-        triggerNotification("success", "Banner enviado com sucesso para a pasta 'banners/' no MinIO!");
+        triggerNotification("success", "Banner enviado com sucesso para a pasta 'banners/' no Supabase Storage!");
       } else {
         triggerNotification("error", res?.error || "Erro ao fazer upload da imagem do banner.");
       }
@@ -1725,7 +1725,7 @@ export default function AdminView() {
         loaded: evt.loaded,
         total: evt.total,
         fileName: file.name,
-        statusText: evt.percent < 100 ? `Transferindo capa (${evt.percent}%)...` : "Processando no servidor MinIO..."
+        statusText: evt.percent < 100 ? `Transferindo capa (${evt.percent}%)...` : "Processando no Supabase Storage..."
       });
     })
       .then((res) => {
@@ -2160,7 +2160,7 @@ export default function AdminView() {
       const res = await uploadFileWithProgress(file, "materiais", getAuthHeaders());
       if (res && res.success && (res.previewUrl || res.url)) {
         setMatThumbnail(res.previewUrl || res.url);
-        triggerNotification("success", "Imagem de capa do material enviada para 'materiais/' no MinIO!");
+        triggerNotification("success", "Imagem de capa do material enviada para 'materiais/' no Supabase Storage!");
       } else {
         triggerNotification("error", res?.error || "Erro ao enviar capa do material.");
       }
@@ -3023,7 +3023,7 @@ export default function AdminView() {
           </div>
         </div>
 
-        {/* Backup do Suporte (PDF/ZIP -> MinIO) */}
+        {/* Backup do Suporte (PDF/ZIP -> Storage) */}
         <div className="bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-start gap-3">
@@ -3034,7 +3034,7 @@ export default function AdminView() {
                 <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Backup do Suporte</h3>
                 <p className="text-[11px] text-[#8a96a3] max-w-xl">
                   Gera um PDF por chamado fechado (arquivo com o nome do D.I., código e data de fechamento),
-                  compacta todos em um .zip e salva na pasta <span className="font-mono text-white">backup-suporte/</span> do MinIO,
+                  compacta todos em um .zip e salva na pasta <span className="font-mono text-white">backup-suporte/</span> do Supabase Storage,
                   organizado por data. Os chamados permanecem no banco — o backup é uma cópia de segurança.
                 </p>
               </div>
@@ -3320,9 +3320,9 @@ export default function AdminView() {
                   <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Criar Backup (a "save")</h3>
                   <p className="text-[11px] text-[#8a96a3] max-w-2xl leading-relaxed">
                     Tira um retrato completo do estado atual do site: tabelas (cursos, materiais, novidades, tecnologias, posts, bio),
-                    todas as configurações, contas de acesso e o manifesto das mídias do MinIO (as mídias em si nunca são apagadas —
+                    todas as configurações, contas de acesso e o manifesto das mídias do Supabase Storage (as mídias em si nunca são apagadas —
                     o backup preserva as URLs de conexão, inclusive do Vimeo/YouTube). O arquivo fica na pasta{" "}
-                    <span className="font-mono text-white">backups-site/</span> do MinIO e você também pode baixá-lo para guardar em outro lugar.
+                    <span className="font-mono text-white">backups-site/</span> do Supabase Storage e você também pode baixá-lo para guardar em outro lugar.
                     Faça um backup <strong className="text-white">antes de cada atualização</strong> do site.
                   </p>
                 </div>
@@ -3375,7 +3375,7 @@ export default function AdminView() {
                     Retrato <strong className="text-white">completo do banco</strong>: todas as configurações, tabelas (cursos, materiais,
                     novidades, tecnologias, posts, bio), contas de acesso e uma <strong className="text-white">cópia imutável do histórico de
                     auditoria</strong>. Gerado <strong className="text-white">automaticamente junto de cada "Criar Backup Agora"</strong> e também
-                    manualmente abaixo. Fica em <span className="font-mono text-white">backups-banco/</span> no MinIO (guarda os{" "}
+                    manualmente abaixo. Fica em <span className="font-mono text-white">backups-banco/</span> no Supabase Storage (guarda os{" "}
                     <strong className="text-white">10 dumps mais recentes</strong>) e pode ser baixado para guardar fora do servidor.
                   </p>
                 </div>
@@ -3444,7 +3444,7 @@ export default function AdminView() {
                             ? "bg-red-600 border border-red-500 text-white"
                             : "bg-white/5 border border-white/10 text-red-400/90 hover:bg-red-500/20"
                         }`}
-                        title="Excluir definitivamente este dump do MinIO"
+                        title="Excluir definitivamente este dump do Supabase Storage"
                       >
                         {bakDumpDeleting === d.key ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -3593,7 +3593,7 @@ export default function AdminView() {
                             ? "bg-red-600 border border-red-500 text-white"
                             : "bg-white/5 border border-white/10 text-red-400/90 hover:bg-red-500/20"
                         }`}
-                        title="Excluir definitivamente esta save do MinIO"
+                        title="Excluir definitivamente esta save do Supabase Storage"
                       >
                         {bakDeleting === b.key ? (
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -3622,7 +3622,7 @@ export default function AdminView() {
                     Verificação de Integridade das Mídias
                   </h3>
                   <p className="text-[11px] text-[#8a96a3] max-w-2xl leading-relaxed">
-                    Confere cada imagem/vídeo/arquivo citado no site contra o servidor de mídias (MinIO) e lista o que{" "}
+                    Confere cada imagem/vídeo/arquivo citado no site contra o servidor de mídias (Supabase Storage) e lista o que{" "}
                     <strong className="text-white">sumiu</strong> (ausente) e o que está no servidor{" "}
                     <strong className="text-white">sem nenhuma referência</strong> (órfão). Leitura apenas — nada é apagado sem você escolher
                     abaixo. Executa também sozinho no final de cada restauração. Os backups nunca entram na conta.
@@ -3655,7 +3655,7 @@ export default function AdminView() {
                     Citadas no site: <span className="text-white">{intResult.totalReferenciadas}</span>
                   </span>
                   <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
-                    Presentes no MinIO: {intResult.presentes}
+                    Presentes no Supabase Storage: {intResult.presentes}
                   </span>
                   <span className="px-2.5 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-[10px] font-bold text-[#8a96a3]">
                     Objetos no bucket (fora de backups): <span className="text-white">{intResult.totalObjetos}</span>
@@ -3675,7 +3675,7 @@ export default function AdminView() {
                 {intResult.ausentes.length > 0 && (
                   <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 space-y-2">
                     <p className="text-[11px] font-bold text-red-300 uppercase tracking-wider">
-                      ⚠ Mídias citadas no site mas AUSENTES do MinIO (o site está mostrando quebra)
+                      ⚠ Mídias citadas no site mas AUSENTES do Supabase Storage (o site está mostrando quebra)
                     </p>
                     <ul className="space-y-1 max-h-40 overflow-y-auto">
                       {intResult.ausentes.map((a) => (
@@ -3694,7 +3694,7 @@ export default function AdminView() {
                   <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">
-                        Mídias órfãs no MinIO ({intResult.semReferencia.length}) — ninguém no site as usa
+                        Mídias órfãs no Supabase Storage ({intResult.semReferencia.length}) — ninguém no site as usa
                       </p>
                       <button
                         onClick={handleCleanupOrphans}
@@ -3744,7 +3744,7 @@ export default function AdminView() {
 
                 {orphanCleaned && orphanCleaned.length > 0 && (
                   <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-1">
-                    <p className="text-[11px] font-bold text-emerald-400">Removidas do MinIO:</p>
+                    <p className="text-[11px] font-bold text-emerald-400">Removidas do Supabase Storage:</p>
                     {orphanCleaned.map((k) => (
                       <p key={k} className="text-[10px] text-emerald-200/80 font-mono break-all">{k}</p>
                     ))}
@@ -3802,7 +3802,7 @@ export default function AdminView() {
                 className="mt-0.5 w-4 h-4 accent-[#d12a62]"
               />
               <span className="text-[11px] text-[#8a96a3] leading-relaxed">
-                Restaurar também as <strong className="text-white">configurações de conexão</strong> (MinIO e Vimeo). Recomendado para voltar
+                Restaurar também as <strong className="text-white">configurações de conexão</strong> (Supabase Storage e Vimeo). Recomendado para voltar
                 exatamente ao estado da save. Se a conexão atual com os arquivos estiver funcionando, você pode desmarcar.
               </span>
             </label>
@@ -5415,7 +5415,7 @@ export default function AdminView() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Arquivo para Download (MinIO: materiais/)</label>
+                <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Arquivo para Download (Storage: materiais/)</label>
                 
                 <div className="flex items-center gap-2">
                   <label className="flex-1 cursor-pointer bg-[#131922] hover:bg-[#1a222e] border border-dashed border-white/20 hover:border-[#d12a62] rounded-xl p-3 flex items-center justify-center gap-2 transition-all group text-xs text-[#e8edf2]">
@@ -5452,7 +5452,7 @@ export default function AdminView() {
                   <Upload className="w-4 h-4 text-[#8a96a3] absolute left-3.5 top-3.5" />
                 </div>
                 <p className="text-[9px] text-[#8a96a3] leading-relaxed">
-                  Os arquivos enviados por esta ferramenta são salvos automaticamente na pasta <code className="text-[#d12a62]">materiais/</code> no servidor MinIO.
+                  Os arquivos enviados por esta ferramenta são salvos automaticamente na pasta <code className="text-[#d12a62]">materiais/</code> no Supabase Storage.
                 </p>
               </div>
 
@@ -6043,7 +6043,7 @@ export default function AdminView() {
       )}
 
 
-      {/* TAB CONTENT: CONEXÕES — STATUS MinIO + Vimeo (sem credenciais) */}
+      {/* TAB CONTENT: CONEXÕES — STATUS Supabase Storage + Vimeo (sem credenciais) */}
       {activeTab === "servidores" && (
         <div className="space-y-10 animate-fade-in">
           {/* Main Header Card */}
@@ -6055,10 +6055,10 @@ export default function AdminView() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl font-black text-white font-display">Status das Integrações</h2>
-                  <span className="text-[10px] font-mono font-bold uppercase bg-white/10 text-gray-300 px-2 py-0.5 rounded border border-white/10">Vimeo &amp; MinIO</span>
+                  <span className="text-[10px] font-mono font-bold uppercase bg-white/10 text-gray-300 px-2 py-0.5 rounded border border-white/10">Vimeo &amp; Storage</span>
                 </div>
                 <p className="text-xs text-[#8a96a3] mt-0.5">
-                  Verificação em tempo real da conexão com o armazenamento (MinIO S3) e com a API do Vimeo.
+                  Verificação em tempo real da conexão com o armazenamento (Supabase Storage) e com a API do Vimeo.
                   As credenciais vivem nas variáveis de ambiente do servidor — nunca são exibidas ou editadas aqui.
                 </p>
               </div>
@@ -6075,33 +6075,33 @@ export default function AdminView() {
             </button>
           </div>
 
-          {/* Grid: MinIO | Vimeo */}
+          {/* Grid: Storage | Vimeo */}
           <div className="grid lg:grid-cols-2 gap-6">
-            {/* --- MINIO --- */}
+            {/* --- STORAGE --- */}
             <div className="bg-[#151b22]/60 border border-white/10 rounded-3xl p-6 shadow-xl space-y-5">
               <div className="flex items-center justify-between border-b border-white/5 pb-4">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-[#d12a62]/10 rounded-xl border border-[#d12a62]/20">
                     <HardDrive className="w-5 h-5 text-white" />
                   </div>
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">MinIO Object Storage</h3>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Supabase Storage</h3>
                 </div>
                 {!integrationsLoading && integrationsStatus && (
                   <span className={`text-[10px] font-mono px-2.5 py-1 rounded-lg border font-bold uppercase flex items-center gap-1.5 ${
-                    integrationsStatus.minio.online
+                    integrationsStatus.storage.online
                       ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
-                      : integrationsStatus.minio.configured
+                      : integrationsStatus.storage.configured
                         ? "bg-red-950/60 border-red-500/30 text-red-300"
                         : "bg-amber-500/10 border-amber-500/20 text-amber-300"
                   }`}>
-                    {integrationsStatus.minio.online
+                    {integrationsStatus.storage.online
                       ? <CheckCircle2 className="w-3.5 h-3.5" />
-                      : integrationsStatus.minio.configured
+                      : integrationsStatus.storage.configured
                         ? <X className="w-3.5 h-3.5" />
                         : <AlertCircle className="w-3.5 h-3.5" />}
-                    {integrationsStatus.minio.online
+                    {integrationsStatus.storage.online
                       ? "Conectado"
-                      : integrationsStatus.minio.configured
+                      : integrationsStatus.storage.configured
                         ? "Falhou"
                         : "Não configurado"}
                   </span>
@@ -6115,37 +6115,35 @@ export default function AdminView() {
               ) : (
                 <div className="space-y-2.5 text-xs font-mono">
                   <p className={`text-[12px] leading-relaxed ${
-                    integrationsStatus?.minio.online
+                    integrationsStatus?.storage.online
                       ? "text-emerald-300"
-                      : integrationsStatus?.minio.configured
+                      : integrationsStatus?.storage.configured
                         ? "text-red-300"
                         : "text-amber-300"
                   }`}>
-                    {integrationsStatus?.minio.message || "Verificando..."}
+                    {integrationsStatus?.storage.message || "Verificando..."}
                   </p>
-                  {integrationsStatus?.minio.endpoint && (
-                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Servidor:</span> <span className="text-white">{integrationsStatus.minio.endpoint}</span></p>
+                  {integrationsStatus?.storage.endpoint && (
+                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Servidor:</span> <span className="text-white">{integrationsStatus.storage.endpoint}</span></p>
                   )}
-                  {integrationsStatus?.minio.bucket && (
-                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Bucket:</span> {integrationsStatus.minio.bucket}</p>
+                  {integrationsStatus?.storage.bucket && (
+                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Bucket:</span> {integrationsStatus.storage.bucket}</p>
                   )}
-                  {integrationsStatus?.minio.region && (
-                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Região:</span> {integrationsStatus.minio.region}</p>
+                  {integrationsStatus?.storage.region && (
+                    <p className="text-[#8a96a3]"><span className="text-gray-400 font-bold">Região:</span> {integrationsStatus.storage.region}</p>
                   )}
                   <p className="text-[#8a96a3]">
                     <span className="text-gray-400 font-bold">Origem da configuração:</span>{" "}
-                    {integrationsStatus?.minio.source === "env"
+                    {integrationsStatus?.storage.source === "env"
                       ? "variáveis de ambiente (.env)"
-                      : integrationsStatus?.minio.source === "db"
-                        ? "configuração antiga do banco (mova para o .env)"
-                        : "não configurado"}
+                      : "não configurado"}
                   </p>
                   <div className="flex items-center gap-4 pt-1 text-[10px] text-gray-500">
-                    {integrationsStatus?.minio.latencyMs !== null && integrationsStatus?.minio.latencyMs !== undefined && (
-                      <span>Latência: <strong className="text-gray-300">{integrationsStatus.minio.latencyMs} ms</strong></span>
+                    {integrationsStatus?.storage.latencyMs !== null && integrationsStatus?.storage.latencyMs !== undefined && (
+                      <span>Latência: <strong className="text-gray-300">{integrationsStatus.storage.latencyMs} ms</strong></span>
                     )}
-                    {integrationsStatus?.minio.lastCheckedAt && (
-                      <span>Verificado: {new Date(integrationsStatus.minio.lastCheckedAt).toLocaleTimeString("pt-BR")}</span>
+                    {integrationsStatus?.storage.lastCheckedAt && (
+                      <span>Verificado: {new Date(integrationsStatus.storage.lastCheckedAt).toLocaleTimeString("pt-BR")}</span>
                     )}
                   </div>
                 </div>
@@ -6237,18 +6235,13 @@ export default function AdminView() {
               <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Configuração segura (variáveis de ambiente)</h3>
             </div>
             <p className="text-xs text-[#8a96a3] leading-relaxed">
-              Por segurança, as credenciais do MinIO e do Vimeo <strong className="text-gray-300">não são editadas pelo painel</strong>.
+              Por segurança, as credenciais do Supabase Storage e do Vimeo <strong className="text-gray-300">não são editadas pelo painel</strong>.
               Defina-as no arquivo <code className="text-gray-200 font-mono">.env</code> do servidor (fora do código e do frontend):
             </p>
             <div className="bg-[#0b0f14] border border-white/10 rounded-2xl p-4 font-mono text-[11px] text-gray-300 space-y-1 overflow-x-auto">
-              <p><span className="text-[#d12a62] font-bold"># MinIO:</span> MINIO_ENDPOINT, MINIO_PORT, MINIO_USE_SSL, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, MINIO_REGION, MINIO_CONSOLE_URL</p>
+              <p><span className="text-[#d12a62] font-bold"># Supabase:</span> SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY</p>
               <p><span className="text-sky-400 font-bold"># Vimeo:</span> VIMEO_CLIENT_ID, VIMEO_CLIENT_SECRET, VIMEO_ACCESS_TOKEN</p>
             </div>
-            {integrationsStatus?.minio?.source === "db" && (
-              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3">
-                ⚠️ O MinIO está usando a configuração antiga do banco de dados. Mova as credenciais para o .env o quanto antes.
-              </p>
-            )}
             {integrationsStatus?.vimeo?.source === "db" && (
               <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3">
                 ⚠️ O Vimeo está usando a configuração antiga do banco de dados. Mova as credenciais para o .env o quanto antes.

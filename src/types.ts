@@ -153,9 +153,8 @@ export interface SupportAnexo {
   nome: string; // nome original sanitizado (para exibição)
   tamanhoKb: number;
   mime: string;
-  key: string; // object key no MinIO (quando storage="minio")
-  localPath?: string; // relativo a data/suporte-anexos/ quando storage="local"
-  storage: "minio" | "local";
+  key: string; // object key no Supabase Storage
+  storage: "storage";
   isImage: boolean;
 }
 
@@ -236,17 +235,6 @@ export interface OuvidoriaConfig {
   notifyParceriaEmail?: boolean;
 }
 
-export interface MinioConfig {
-  endpoint: string;
-  port: number;
-  useSSL: boolean;
-  accessKey: string;
-  secretKey: string;
-  bucket: string;
-  region: string;
-  consoleUrl: string;
-}
-
 export interface DBData {
   leaderBio: LeaderBio;
   novidades: Novidade[];
@@ -259,7 +247,6 @@ export interface DBData {
   moderatorLinks?: ModeratorLink[];
   ouvidoriaMessages?: OuvidoriaMessage[];
   ouvidoriaConfig?: OuvidoriaConfig;
-  minioConfig?: MinioConfig;
   categoriasMateriais?: string[];
   logoUrl?: string;
   diCodes?: DICode[];

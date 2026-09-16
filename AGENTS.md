@@ -58,7 +58,7 @@ SMTP_HOST/PORT/USER/PASS/SECURE, MAIL_FROM_NAME (opcional, inativo)
 |---|---|
 | `server.ts` | API Express principal |
 | `src/server/db.ts` | Acesso Supabase, configs, CRUD, auditoria |
-| `src/server/minioService.ts` | Shim storage (compatibilidade "MinIO") |
+| `src/server/storageService.ts` | Supabase Storage (bucket fixo `armazenamento`, sem fallback) |
 | `src/server/nipponflexService.ts` | Sync D.I.s Nipponflex → `dis_fenix` |
 | `src/server/backupService.ts` | Backups JSON + checksum |
 | `src/server/rateLimiter.ts` | Rate limiters |
@@ -115,7 +115,7 @@ LoginModal (4-6 dígitos) → store.login() → POST /api/auth/login
 - **Social:** `/api/fenix-social/*`
 - **Admin:** `/api/admin/*` (requireAdmin) — conteúdo, nipponflex, backup, etc.
 - **Suporte:** `/api/support/*` — SSE, tickets, mensagens
-- **Storage:** `/api/minio/upload`, `/api/minio/preview/*`, `/api/minio/stream/*`
+- **Storage:** `/api/storage/upload`, `/api/storage/preview/*`, `/api/storage/stream/*`, `/api/storage/hls/*` (Supabase Storage, bucket `armazenamento`)
 
 ---
 
@@ -126,3 +126,5 @@ LoginModal (4-6 dígitos) → store.login() → POST /api/auth/login
 - Backups antes de updates. Service_role só no servidor.
 - Frontend: switch de `activeView` (sem react-router).
 - `npx tsc --noEmit` tem erro pré-existente em `ErrorBoundary.tsx` (não alterar sem permissão).
+- **Armazenamento:** todo upload/mídia/logo vai para o bucket `armazenamento` do Supabase (via `storageService.ts`). **Sem fallback em disco.** Rotas de mídia: `/api/storage/*`. Não reverter para MinIO.
+- **RLS:** o anon lê apenas keys públicas da `config` (incluindo `paginaTecnologias`, `paginaElite`, `paginaBiografia`). Não alterar políticas sem aprovação.

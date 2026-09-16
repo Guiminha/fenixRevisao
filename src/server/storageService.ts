@@ -2,38 +2,13 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { Readable } from "node:stream";
 
 // ====================================================================
-// Serviço de armazenamento baseado em Supabase Storage (SELF-HOSTED).
-// Substitui o cliente MinIO mantendo a MESMA superfície de API
-// (getActiveMinioClient etc.) para não quebrar server.ts/backupService.ts.
-//
-// O objeto retornado por getActiveMinioClient() é compatível com os
-// métodos usados no código: putObject, getObject, statObject,
-// getPartialObject, listObjectsV2, removeObject.
+// Serviço de armazenamento — Supabase Storage (SELF-HOSTED).
+// Fonte única de mídia/arquivos do site. Bucket fixo: "armazenamento".
+// Sem fallback em disco: se o Storage falhar, a operação falha.
 // ====================================================================
 
-export interface MinioConfig {
-  endpoint: string;
-  port: number;
-  useSSL: boolean;
-  accessKey: string;
-  secretKey: string;
-  bucket: string;
-  region: string;
-  consoleUrl: string;
-}
+export const STORAGE_BUCKET = "armazenamento";
 
-export const defaultConfig: MinioConfig = {
-  endpoint: "",
-  port: 9000,
-  useSSL: false,
-  accessKey: "",
-  secretKey: "",
-  bucket: "armazenamento",
-  region: "us-east-1",
-  consoleUrl: ""
-};
-
-let activeConfig: MinioConfig = { ...defaultConfig };
 let supabaseClient: SupabaseClient | null = null;
 
 function storage(): SupabaseClient {
@@ -46,18 +21,21 @@ function storage(): SupabaseClient {
   return supabaseClient;
 }
 
-export function parseMinioEndpoint(rawUrl: string, rawPort?: number, rawUseSSL?: boolean): { endPoint: string; port: number; useSSL: boolean } {
-  let cleanUrl = rawUrl.trim();
-  let useSSL = rawUseSSL !== undefined ? rawUseSSL : false;
-  let port = rawPort || 9000;
-  if (cleanUrl.startsWith("https://")) { useSSL = true; cleanUrl = cleanUrl.replace("https://", ""); }
-  else if (cleanUrl.startsWith("http://")) { useSSL = false; cleanUrl = cleanUrl.replace("http://", ""); }
-  cleanUrl = cleanUrl.replace(/\/+$/, "");
-  if (cleanUrl.includes(":")) { const p = cleanUrl.split(":"); cleanUrl = p[0]; const pp = parseInt(p[1], 10); if (!isNaN(pp)) port = pp; }
-  return { endPoint: cleanUrl, port, useSSL };
+// HEAD de um objeto no Supabase Storage — retorna metadados sem baixar o
+// conteúdo (evita o download inteiro que estourava o timeout em arquivos
+// grandes só para obter o tamanho).
+async function headObject(bucket: string, key: string): Promise<{ size: number; lastModified: Date }> {
+  const url = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  const endpoint = `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  const res = await fetch(endpoint, { method: "HEAD", headers: { apikey: apiKey, Authorization: `Bearer ${apiKey}` } });
+  if (!res.ok) throw new Error(`Object not found (${res.status})`);
+  const size = Number(res.headers.get("content-length") || 0);
+  const last = res.headers.get("last-modified");
+  return { size, lastModified: last ? new Date(last) : new Date() };
 }
 
-export interface MinioCompatibleClient {
+export interface StorageCompatibleClient {
   putObject(bucket: string, key: string, buffer: Buffer, size?: number, meta?: any): Promise<any>;
   statObject(bucket: string, key: string): Promise<{ size: number; metaData: any; lastModified: Date }>;
   getObject(bucket: string, key: string): Promise<Readable>;
@@ -69,13 +47,7 @@ export interface MinioCompatibleClient {
   listBuckets(): Promise<{ name: string }[]>;
 }
 
-export function initMinioClient(config: MinioConfig): MinioCompatibleClient {
-  activeConfig = { ...config };
-  return getActiveMinioClient();
-}
-
-// Retorna um objeto compatível com o cliente MinIO, mas apoiado no Storage.
-export function getActiveMinioClient(): MinioCompatibleClient {
+export function getActiveStorageClient(): StorageCompatibleClient {
   const sb = storage();
   return {
     async putObject(bucket: string, key: string, buffer: Buffer, _size?: number, meta?: any) {
@@ -85,10 +57,8 @@ export function getActiveMinioClient(): MinioCompatibleClient {
       return { etag: "" };
     },
     async statObject(bucket: string, key: string) {
-      const { data, error } = await sb.storage.from(bucket).download(key);
-      if (error) throw new Error(error.message);
-      const buf = Buffer.from(await data.arrayBuffer());
-      return { size: buf.length, metaData: {}, lastModified: new Date() };
+      const { size, lastModified } = await headObject(bucket, key);
+      return { size, metaData: {}, lastModified };
     },
     async getObject(bucket: string, key: string): Promise<Readable> {
       const { data, error } = await sb.storage.from(bucket).download(key);
@@ -128,10 +98,6 @@ export function getActiveMinioClient(): MinioCompatibleClient {
   };
 }
 
-export function getActiveMinioConfig(): MinioConfig {
-  return activeConfig;
-}
-
 export function withTimeout<T>(promise: Promise<T>, ms = 4000, errorMsg = "Tempo limite de conexão excedido"): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${errorMsg} (${ms}ms)`)), ms);
@@ -139,7 +105,7 @@ export function withTimeout<T>(promise: Promise<T>, ms = 4000, errorMsg = "Tempo
   });
 }
 
-export async function ensureMinioBucketExists(bucketName: string): Promise<{ ready: boolean; error?: string }> {
+export async function ensureBucketExists(bucketName: string): Promise<{ ready: boolean; error?: string }> {
   try {
     const { data, error } = await storage().storage.listBuckets();
     if (error) return { ready: false, error: error.message };
@@ -154,8 +120,7 @@ export async function ensureMinioBucketExists(bucketName: string): Promise<{ rea
   }
 }
 
-export async function testMinioConnection(config?: MinioConfig): Promise<{ success: boolean; message: string; buckets?: string[]; detectedPort?: number }> {
-  const cfg = config || activeConfig;
+export async function testStorageConnection(): Promise<{ success: boolean; message: string; buckets?: string[] }> {
   try {
     const { data, error } = await storage().storage.listBuckets();
     if (error) {

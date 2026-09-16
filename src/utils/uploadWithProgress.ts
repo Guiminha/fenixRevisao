@@ -50,7 +50,7 @@ export function uploadFileWithProgress(
       reject(new Error("Tempo limite de conexão excedido no upload."));
     };
 
-    xhr.open("POST", "/api/minio/upload");
+    xhr.open("POST", "/api/storage/upload");
     xhr.timeout = 0; // Tempo de upload ilimitado para arquivos grandes de qualquer tamanho
     
     // Set headers

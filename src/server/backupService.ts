@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import JSZip from "jszip";
 import { dbService, getSupabaseTrustedClient } from "./db.js";
-import { getActiveMinioClient, ensureMinioBucketExists, withTimeout } from "./minioService.js";
+import { getActiveStorageClient, ensureBucketExists, withTimeout, STORAGE_BUCKET } from "./storageService.js";
 
 export const BACKUP_PREFIX = "backups-site/";
 export const BANCO_BACKUP_PREFIX = "backups-banco/";
@@ -19,7 +19,7 @@ const PRE_EXCLUSAO_THROTTLE_MS = 10 * 60 * 1000;
 const BACKUP_PREFIXES = [BACKUP_PREFIX, BANCO_BACKUP_PREFIX, SUPORTE_BACKUP_PREFIX];
 
 const TABELAS = ["novidades", "cursos", "materiais", "tecnologias", "fenix_posts", "leader_bio"] as const;
-const CONFIG_KEY_CONEXOES = ["minioConfig", "vimeoConfig"];
+const CONFIG_KEY_CONEXOES = ["vimeoConfig"];
 
 let restoreInProgress = false;
 
@@ -101,9 +101,8 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 async function listBucketObjects(prefix: string, excludeBackups = false): Promise<{ nome: string; tamanho: number; modificadoEm: string }[]> {
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
   const items: { nome: string; tamanho: number; modificadoEm: string }[] = [];
   const collect = (async () => {
     const stream = client.listObjectsV2(bucket, prefix, true);
@@ -113,7 +112,7 @@ async function listBucketObjects(prefix: string, excludeBackups = false): Promis
       items.push({ nome: obj.name, tamanho: obj.size || 0, modificadoEm: obj.lastModified ? new Date(obj.lastModified).toISOString() : "" });
     }
   })();
-  await withTimeout(collect, 90000, "Tempo limite ao listar objetos do MinIO");
+  await withTimeout(collect, 90000, "Tempo limite ao listar objetos do Storage");
   return items;
 }
 
@@ -156,15 +155,14 @@ async function collectCoreData(): Promise<{ config: { key: string; value: unknow
 }
 
 async function putBackupObject(key: string, buffer: Buffer): Promise<void> {
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const bucketStatus = await ensureMinioBucketExists(bucket);
-  if (!bucketStatus.ready) throw new Error("Bucket do MinIO não está disponível para o backup.");
-  const client = getActiveMinioClient();
+  const bucket = STORAGE_BUCKET;
+  const bucketStatus = await ensureBucketExists(bucket);
+  if (!bucketStatus.ready) throw new Error("Bucket do Storage não está disponível para o backup.");
+  const client = getActiveStorageClient();
   await withTimeout(
     client.putObject(bucket, key, buffer, buffer.length, { "Content-Type": "application/json" }),
     60000,
-    "Tempo limite ao gravar o backup no MinIO"
+    "Tempo limite ao gravar o backup no Storage"
   );
 }
 
@@ -178,9 +176,8 @@ async function pruneOldBackups(): Promise<number> {
       .sort((a, b) => (a.modificadoEm < b.modificadoEm ? 1 : a.modificadoEm > b.modificadoEm ? -1 : 0));
     const excedentes = jsons.length - MAX_BACKUPS;
     if (excedentes <= 0) return 0;
-    const minioConfig = await dbService.getMinioConfig();
-    const bucket = minioConfig.bucket || "armazenamento";
-    const client = getActiveMinioClient();
+    const bucket = STORAGE_BUCKET;
+    const client = getActiveStorageClient();
     let removidos = 0;
     for (const item of jsons.slice(MAX_BACKUPS)) {
       await client.removeObject(bucket, item.nome).catch(() => {});
@@ -254,7 +251,7 @@ export async function createSiteBackup(opts: { geradoPor: string; userToken?: st
     success: true,
     key,
     nome,
-    url: `/api/minio/stream/${encodeURIComponent(key)}`,
+    url: `/api/storage/stream/${encodeURIComponent(key)}`,
     tamanhoKb: Math.round(buffer.length / 1024),
     resumo: snapshot.resumo,
     checksum
@@ -314,10 +311,9 @@ export async function listSiteBackups(): Promise<{ success: boolean; backups: Ba
 }
 
 async function getBackupBuffer(key: string): Promise<Buffer> {
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
-  const stream = await withTimeout(client.getObject(bucket, key), 30000, "Tempo limite ao baixar o backup do MinIO");
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
+  const stream = await withTimeout(client.getObject(bucket, key), 30000, "Tempo limite ao baixar o backup do Storage");
   return streamToBuffer(stream);
 }
 
@@ -345,11 +341,10 @@ export async function deleteSiteBackup(key: string, geradoPor: string): Promise<
   if (restoreInProgress) {
     throw new Error("Uma restauração está em andamento — não é possível excluir backups agora.");
   }
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
-  await withTimeout(client.statObject(bucket, key), 15000, "Tempo limite ao verificar o backup no MinIO");
-  await withTimeout(client.removeObject(bucket, key), 30000, "Tempo limite ao excluir o backup do MinIO");
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
+  await withTimeout(client.statObject(bucket, key), 15000, "Tempo limite ao verificar o backup no Storage");
+  await withTimeout(client.removeObject(bucket, key), 30000, "Tempo limite ao excluir o backup do Storage");
   const nome = key.replace(BACKUP_PREFIX, "");
   dbService
     .recordAuditLog(geradoPor, "EXCLUIR_BACKUP", `Backup excluído definitivamente: ${nome}`)
@@ -377,7 +372,7 @@ async function buildBackupZipFor(prefix: string, key: string): Promise<{ buffer:
 
 // ---------------- DUMP DO BANCO DE DADOS ----------------
 // Retrato COMPLETO do banco (configs, todas as tabelas, contas e cópia imutável
-// dos audit_logs) gravado em backups-banco/banco-<data>_<hora>.json no MinIO.
+// dos audit_logs) gravado em backups-banco/banco-<data>_<hora>.json no Storage.
 // Complementa a save do site: serve para reconstruir/auditar o banco sozinho.
 
 async function pruneBancoBackups(): Promise<number> {
@@ -388,9 +383,8 @@ async function pruneBancoBackups(): Promise<number> {
       .sort((a, b) => (a.modificadoEm < b.modificadoEm ? 1 : a.modificadoEm > b.modificadoEm ? -1 : 0));
     const excedentes = jsons.length - MAX_BANCO_BACKUPS;
     if (excedentes <= 0) return 0;
-    const minioConfig = await dbService.getMinioConfig();
-    const bucket = minioConfig.bucket || "armazenamento";
-    const client = getActiveMinioClient();
+    const bucket = STORAGE_BUCKET;
+    const client = getActiveStorageClient();
     let removidos = 0;
     for (const item of jsons.slice(MAX_BANCO_BACKUPS)) {
       await client.removeObject(bucket, item.nome).catch(() => {});
@@ -465,7 +459,7 @@ export async function createDatabaseDump(opts: { geradoPor: string; userToken?: 
     success: true,
     key,
     nome,
-    url: `/api/minio/stream/${encodeURIComponent(key)}`,
+    url: `/api/storage/stream/${encodeURIComponent(key)}`,
     tamanhoKb: Math.round(buffer.length / 1024),
     resumo: snapshot.resumo,
     checksum
@@ -513,11 +507,10 @@ export async function deleteBancoBackup(key: string, geradoPor: string): Promise
   if (restoreInProgress) {
     throw new Error("Uma restauração está em andamento — não é possível excluir dumps agora.");
   }
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
-  await withTimeout(client.statObject(bucket, key), 15000, "Tempo limite ao verificar o dump no MinIO");
-  await withTimeout(client.removeObject(bucket, key), 30000, "Tempo limite ao excluir o dump do MinIO");
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
+  await withTimeout(client.statObject(bucket, key), 15000, "Tempo limite ao verificar o dump no Storage");
+  await withTimeout(client.removeObject(bucket, key), 30000, "Tempo limite ao excluir o dump do Storage");
   const nome = key.replace(BANCO_BACKUP_PREFIX, "");
   dbService.recordAuditLog(geradoPor, "EXCLUIR_BACKUP_BANCO", `Dump do banco excluído definitivamente: ${nome}`).catch(() => {});
   return { success: true, nome };
@@ -568,11 +561,11 @@ export async function ensureDeleteProtection(opts: { geradoPor: string; userToke
 }
 
 // ---------------- REFERÊNCIAS DE MÍDIA ----------------
-// Extrai as chaves de objetos do MinIO citadas em qualquer valor JSON (item de
-// tabela, config etc.). URLs do site: /api/minio/stream/<key-encoded> e
-// /api/minio/preview/<key-encoded>.
+// Extrai as chaves de objetos do Storage citadas em qualquer valor JSON (item de
+// tabela, config etc.). URLs do site: /api/storage/stream/<key-encoded> e
+// /api/storage/preview/<key-encoded>.
 
-const MEDIA_URL_RE = /\/api\/minio\/(?:stream|preview)\/([^"'\s)\\]+)/g;
+const MEDIA_URL_RE = /\/api\/storage\/(?:stream|preview)\/([^"'\s)\\]+)/g;
 
 function collectMediaKeysInto(value: unknown, out: Set<string>): void {
   if (typeof value === "string") {
@@ -610,7 +603,7 @@ async function allReferencedMediaKeys(): Promise<Set<string>> {
   return referenciadas;
 }
 
-// Remove do MinIO APENAS as mídias que não são mais citadas em NENHUM lugar do
+// Remove do Storage APENAS as mídias que não são mais citadas em NENHUM lugar do
 // site (tabelas + configs). Mídia compartilhada/em uso é mantida. Backups nunca
 // são tocados. Audita tudo que foi removido.
 export async function removeOrphanMedia(
@@ -621,9 +614,8 @@ export async function removeOrphanMedia(
   if (unicas.length === 0) return { removidas: [], mantidas: [] };
 
   const referenciadas = await allReferencedMediaKeys();
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
 
   const removidas: string[] = [];
   const mantidas: string[] = [];
@@ -637,14 +629,14 @@ export async function removeOrphanMedia(
       continue;
     }
     try {
-      await withTimeout(client.statObject(bucket, chave), 15000, "Tempo limite ao verificar mídia no MinIO");
+      await withTimeout(client.statObject(bucket, chave), 15000, "Tempo limite ao verificar mídia no Storage");
     } catch {
       // Já não existe no bucket — nada a excluir.
       mantidas.push(chave);
       continue;
     }
     try {
-      await withTimeout(client.removeObject(bucket, chave), 30000, "Tempo limite ao excluir mídia do MinIO");
+      await withTimeout(client.removeObject(bucket, chave), 30000, "Tempo limite ao excluir mídia do Storage");
       removidas.push(chave);
     } catch (err: any) {
       console.warn("[Backup] Falha ao excluir mídia órfã:", chave, err?.message || err);
@@ -657,7 +649,7 @@ export async function removeOrphanMedia(
       .recordAuditLog(
         geradoPor,
         "EXCLUIR_MIDIA",
-        `Mídias sem referência removidas do MinIO (${removidas.length}): ${removidas.join(", ")}${mantidas.length ? ` — mantidas em uso: ${mantidas.length}` : ""}`
+        `Mídias sem referência removidas do Storage (${removidas.length}): ${removidas.join(", ")}${mantidas.length ? ` — mantidas em uso: ${mantidas.length}` : ""}`
       )
       .catch(() => {});
   }
@@ -665,7 +657,7 @@ export async function removeOrphanMedia(
 }
 
 // ---------------- VERIFICADOR DE INTEGRIDADE ----------------
-// Confere cada mídia citada no site contra o MinIO (achados = ausentes) e lista
+// Confere cada mídia citada no site contra o Storage (achados = ausentes) e lista
 // os objetos do bucket que ninguém cita (órfãos em potencial). Backup de suporte
 // nunca entra nas contas.
 
@@ -698,16 +690,14 @@ export async function checkMediaIntegrity(): Promise<{
       for (const c of local) registrar(c, tabela);
     }
   }
-
-  const minioConfig = await dbService.getMinioConfig();
-  const bucket = minioConfig.bucket || "armazenamento";
-  const client = getActiveMinioClient();
+  const bucket = STORAGE_BUCKET;
+  const client = getActiveStorageClient();
   const ausentes: { chave: string; onde: string }[] = [];
   let presentes = 0;
 
   for (const chave of referenciadas) {
     try {
-      await withTimeout(client.statObject(bucket, chave), 15000, "Tempo limite ao verificar mídia no MinIO");
+      await withTimeout(client.statObject(bucket, chave), 15000, "Tempo limite ao verificar mídia no Storage");
       presentes += 1;
     } catch {
       ausentes.push({ chave, onde: (ondePorChave.get(chave) || []).join(", ") || "?" });
@@ -949,7 +939,7 @@ export async function restoreSiteBackup(opts: {
       const verificacaoFull = { config: configVerif ?? aplicadas.length, ...verificacao };
 
       // 5.1) Verificação de integridade das mídias pós-restore (leitura apenas —
-      //      nada é alterado; avisa se alguma mídia citada sumiu do MinIO).
+      //      nada é alterado; avisa se alguma mídia citada sumiu do Storage).
       let integridade: any = null;
       try {
         integridade = await checkMediaIntegrity();

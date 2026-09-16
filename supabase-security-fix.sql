@@ -50,8 +50,10 @@ GRANT INSERT ON TABLE public.audit_logs TO authenticated;
 
 -- --------------------------------------------------------------------
 -- 2. POLÍTICA DA TABELA CONFIG: expõe apenas chaves públicas para leitura
---    (logoUrl, categoriasMateriais, banners, hiddenHomeCardIds, ouvidoriaConfig).
---    Chaves sensíveis (minioConfig, vimeoConfig, diCodes, moderatorLinks,
+--    (logoUrl, categoriasMateriais, banners, hiddenHomeCardIds, ouvidoriaConfig,
+--    páginaTecnologias, páginaElite, páginaBiografia — lidas pelo endpoint
+--    público /api/content/public com anon).
+--    Chaves sensíveis (vimeoConfig, diCodes, moderatorLinks,
 --    ouvidoriaMessages) ficam invisíveis para anon/authenticated: o backend
 --    lê essas com service_role (que ignora RLS).
 -- --------------------------------------------------------------------
@@ -67,7 +69,10 @@ CREATE POLICY "Leitura de Configurações Públicas" ON public.config
     'categoriasMateriais',
     'banners',
     'hiddenHomeCardIds',
-    'ouvidoriaConfig'
+    'ouvidoriaConfig',
+    'paginaTecnologias',
+    'paginaElite',
+    'paginaBiografia'
   ));
 
 CREATE POLICY "Escrita de Configurações (Admin)" ON public.config

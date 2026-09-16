@@ -171,17 +171,6 @@ export interface OuvidoriaConfig {
   notifyParceriaEmail?: boolean;
 }
 
-export interface MinioConfig {
-  endpoint: string;
-  port: number;
-  useSSL: boolean;
-  accessKey: string;
-  secretKey: string;
-  bucket: string;
-  region: string;
-  consoleUrl: string;
-}
-
 export interface Tecnologia {
   id: string;
   titulo: string;
@@ -203,26 +192,9 @@ export interface VimeoConfig {
   autoFetchDetails?: boolean;
 }
 
-// As credenciais de integração são resolvidas PRIMEIRO pelas variáveis de
-// ambiente (MINIO_* / VIMEO_*), depois pelo config do banco (fallback legado).
+// As credenciais do Vimeo são resolvidas PRIMEIRO pelas variáveis de
+// ambiente (VIMEO_*), depois pelo config do banco (fallback legado).
 // Nunca expor secrets dessas funções via API.
-export function minioConfigFromEnv(): MinioConfig | null {
-  const endpoint = process.env.MINIO_ENDPOINT;
-  const accessKey = process.env.MINIO_ACCESS_KEY;
-  const secretKey = process.env.MINIO_SECRET_KEY;
-  if (!endpoint || !accessKey || !secretKey) return null;
-  return {
-    endpoint,
-    port: Number(process.env.MINIO_PORT) || 9000,
-    useSSL: process.env.MINIO_USE_SSL === "true",
-    accessKey,
-    secretKey,
-    bucket: process.env.MINIO_BUCKET || "armazenamento",
-    region: process.env.MINIO_REGION || "us-east-1",
-    consoleUrl: process.env.MINIO_CONSOLE_URL || "",
-  };
-}
-
 export function vimeoConfigFromEnv(): VimeoConfig | null {
   if (!process.env.VIMEO_ACCESS_TOKEN && !process.env.VIMEO_CLIENT_ID) return null;
   return {
@@ -250,8 +222,7 @@ export interface SupportAnexo {
   tamanhoKb: number;
   mime: string;
   key: string;
-  localPath?: string; // relativo a data/suporte-anexos/ quando storage="local"
-  storage: "minio" | "local";
+  storage: "storage";
   isImage: boolean;
 }
 
@@ -332,7 +303,6 @@ export interface DBData {
   moderatorLinks?: ModeratorLink[];
   ouvidoriaMessages?: OuvidoriaMessage[];
   ouvidoriaConfig?: OuvidoriaConfig;
-  minioConfig?: MinioConfig;
   vimeoConfig?: VimeoConfig;
   categoriasMateriais?: string[];
   logoUrl?: string;
@@ -2803,48 +2773,6 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     }
     
     this.addLocalAuditLog(user, "ATUALIZAR_CONFIG_OUVIDORIA", `Configurações da ouvidoria atualizadas`);
-    this.saveLocal();
-    return currentVal;
-  }
-
-  public async getMinioConfig(userToken?: string): Promise<MinioConfig> {
-    const fromEnv = minioConfigFromEnv();
-    if (fromEnv) return fromEnv;
-
-    const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseTrustedClient(userToken) || supabase;
-    if (isSupabase && client) {
-      try {
-        const { data } = await client.from("config").select("value").eq("key", "minioConfig").maybeSingle();
-        if (data && data.value) return data.value as MinioConfig;
-      } catch (e) {}
-    }
-    const data = this.loadLocal();
-    if (!data.minioConfig) {
-      data.minioConfig = { endpoint: "", port: 9000, useSSL: false, accessKey: "", secretKey: "", bucket: "armazenamento", region: "us-east-1", consoleUrl: "" };
-      this.saveLocal();
-    }
-    return data.minioConfig;
-  }
-
-  public async saveMinioConfig(config: MinioConfig, user: string, userToken?: string): Promise<MinioConfig> {
-    const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseTrustedClient(userToken) || supabase;
-    const data = this.loadLocal();
-    
-    data.minioConfig = { ...config };
-    const currentVal = data.minioConfig;
-    
-    if (isSupabase && client) {
-      try {
-        await Promise.all([
-          client.from("config").upsert({ key: "minioConfig", value: currentVal }),
-          this.addAuditLog(user, "ATUALIZAR_CONFIG_MINIO", `Credenciais MinIO atualizadas`, userToken)
-        ]);
-      } catch (e) {}
-    }
-    
-    this.addLocalAuditLog(user, "ATUALIZAR_CONFIG_MINIO", `Credenciais MinIO atualizadas`);
     this.saveLocal();
     return currentVal;
   }

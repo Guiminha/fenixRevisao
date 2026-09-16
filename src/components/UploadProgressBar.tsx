@@ -64,7 +64,7 @@ export const UploadProgressBar: React.FC<UploadProgressBarProps> = ({
               {uploadState.fileName || title}
             </h4>
             <p className="text-[11px] text-[#8a96a3] flex items-center gap-1.5 mt-0.5">
-              <span>{uploadState.statusText || (uploadState.isUploading ? "Enviando para o servidor MinIO..." : "Processando...")}</span>
+              <span>{uploadState.statusText || (uploadState.isUploading ? "Enviando para o Supabase Storage..." : "Processando...")}</span>
             </p>
           </div>
         </div>
@@ -111,7 +111,7 @@ export const UploadProgressBar: React.FC<UploadProgressBarProps> = ({
         {uploadState.isComplete && (
           <span className="text-emerald-400 font-bold flex items-center gap-1.5">
             <CheckCircle2 className="w-3.5 h-3.5" />
-            Upload Concluído com Sucesso! {uploadState.storageType === "minio" ? "(Bucket MinIO)" : "(Local Resiliente)"}
+            Upload Concluído com Sucesso! {uploadState.storageType === "storage" ? "(Supabase Storage)" : ""}
           </span>
         )}
 

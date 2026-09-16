@@ -10,13 +10,12 @@ import "dotenv/config";
 import { createServer as createViteServer } from "vite";
 import { dbService, LeaderBio, Novidade, Curso, Material, Banner, FenixPost, supabase, getSupabaseTrustedClient } from "./src/server/db.js";
 import { 
-  initMinioClient, 
-  getActiveMinioClient, 
-  getActiveMinioConfig, 
-  testMinioConnection, 
-  ensureMinioBucketExists,
+  STORAGE_BUCKET,
+  getActiveStorageClient, 
+  testStorageConnection, 
+  ensureBucketExists,
   withTimeout 
-} from "./src/server/minioService.js";
+} from "./src/server/storageService.js";
 import {
   executarSincronizacao,
   getNfEstado,
@@ -149,7 +148,7 @@ app.use(helmet({
 app.use(async (req, res, next) => {
   if (!req.path.startsWith("/api/") && req.path !== "/api") return next();
   // Respostas de API não devem ser cacheadas por proxies/navegadores (dados podem
-  // ser autenticados). Rotas de mídia (/api/minio/*) sobrescrevem depois.
+  // ser autenticados). Rotas de mídia (/api/storage/*) sobrescrevem depois.
   res.setHeader("Cache-Control", "no-store");
   if (!dbService.isStrictMode()) return next();
   const ready = await dbService.isSupabaseReady();
@@ -248,7 +247,7 @@ const uploadMulter = multer({
   }
 });
 
-// Allowlist de pastas de destino no MinIO ‐ nunca aceita pastas arbitrárias do cliente
+// Allowlist de pastas de destino no Storage ‐ nunca aceita pastas arbitrárias do cliente
 const ALLOWED_UPLOAD_FOLDERS = new Set([
   "geral",
   "banners",
@@ -273,57 +272,7 @@ function sanitizeUploadFolder(raw: unknown, fallback = "geral"): string | null {
   return folder;
 }
 
-// Initialize MinIO client from database settings
-dbService.getMinioConfig().then((cfg) => {
-  initMinioClient(cfg);
-}).catch((err) => {
-  console.warn("[MinIO Init Warning]:", err);
-});
 
-// Ensure local uploads directory exists for resilient fallback storage
-const uploadsDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Serve Uploads (Supabase Storage primeiro; disco local como fallback dev)
-app.get("/api/uploads/*", async (req, res) => {
-  try {
-    const filePath = req.params[0];
-    if (!filePath || filePath.includes("..") || filePath.includes("\\") || path.isAbsolute(filePath)) {
-      return res.status(403).send("Caminho inválido.");
-    }
-
-    // 1. Tenta servir do Supabase Storage (bucket "armazenamento")
-    try {
-      const bucket = "armazenamento";
-      const stream = await getActiveMinioClient().getObject(bucket, filePath);
-      const ext = fileExtOf(filePath);
-      const mime = EXT_TO_MIME[ext] || "application/octet-stream";
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Type", mime);
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      return stream.pipe(res);
-    } catch (storageErr: any) {
-      // segue para o fallback em disco
-    }
-
-    // 2. Fallback: disco local (uploads/)
-    const fullPath = path.join(uploadsDir, filePath);
-    if (fullPath.startsWith(uploadsDir) && fs.existsSync(fullPath)) {
-      const fileName = path.basename(fullPath);
-      const ext = fileExtOf(filePath);
-      const mime = EXT_TO_MIME[ext] || "application/octet-stream";
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Type", mime);
-      res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/[\r\n"]/g, "_")}"`);
-      return res.sendFile(fullPath);
-    }
-    return res.status(404).send("Arquivo não encontrado.");
-  } catch (err: any) {
-    return res.status(500).send("Erro ao carregar arquivo.");
-  }
-});
 
 // Secret for signing JWT access tokens (must come from environment)
 const envJWTSecret = process.env.JWT_SECRET;
@@ -589,10 +538,9 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 // Serve uploaded files statically
-// Guarda (14/08): quando o MinIO falha, materiais privados caem em public/uploads/
-// e o arquivo cru ficaria baixável anonimamente por esta rota estática. Arquivos
-// que pertencem a materiais com is_public=false só são servidos com sessão
-// (cookie httpOnly/Bearer ‐ mesma regra das mídias materiais/* do MinIO).
+// Serve apenas assets estáticos do app (public/uploads: fallbacks de imagem
+// referenciados em código). Uploads dinâmicos ficam 100% no Supabase Storage.
+// Materiais privados nunca são servidos anonimamente por aqui.
 const privateUploadsCache = new Map<string, { time: number; isPrivate: boolean }>();
 app.use("/uploads", async (req: any, res, next) => {
   const name = (req.path || "").replace(/^\/+/, "");
@@ -645,7 +593,7 @@ app.use("/api/admin", (req: any, res: any, next: any) => {
 // No host PRINCIPAL: /api/admin/* => 403 e /adminfenix => 404 (área invisível ao site).
 // No host DO ADMIN (subdomínio): somente as rotas de API usadas pelo painel
 // (/api/auth*, /api/admin/*, /api/content/*, /api/fenix-social/*, /api/vimeo/*,
-// /api/minio/*, /api/download-status-md) existem; qualquer outro /api/* => 403.
+// /api/storage/*, /api/download-status-md) existem; qualquer outro /api/* => 403.
 // A raiz "/" serve a SPA (o frontend detecta o host e abre o painel de login automaticamente).
 const ADMIN_HOST_PREFIX = (process.env.ADMIN_HOST_PREFIX || "adminfenix.").toLowerCase();
 const ADMIN_HOSTS = (process.env.ADMIN_HOSTS || "")
@@ -715,7 +663,7 @@ function isAdminApiPath(pathname: string): boolean {
   if (pathname.startsWith("/api/moderacao")) return true;
   if (pathname.startsWith("/api/fenix-social/")) return true;
   if (pathname.startsWith("/api/vimeo/")) return true;
-  if (pathname.startsWith("/api/minio/")) return true;
+  if (pathname.startsWith("/api/storage/")) return true;
   return ADMIN_API_WHITELIST.some((w) => pathname.startsWith(w));
 }
 
@@ -1367,7 +1315,7 @@ app.get("/api/content/restricted", authenticateUser, async (req: any, res) => {
 });
 
 // 4. Download Material Increment & Endpoint
-// Entrega o arquivo real do material (MinIO ou /uploads) apenas para sessão
+// Entrega o arquivo real do material (Supabase Storage) apenas para sessão
 // válida ‐ o fetch do client envia cookie httpOnly OU o Bearer do localStorage
 // (o mesmo fallback do authenticateUser). MIME determinada no servidor; o
 // download é sempre attachment.
@@ -1384,15 +1332,13 @@ app.post("/api/content/download/:id", authenticateUser, async (req: any, res) =>
     const fileUrl = material.fileUrl;
 
     try {
-      if (fileUrl.startsWith("/api/minio/") && (fileUrl.includes("/preview/") || fileUrl.includes("/stream/"))) {
-        const objectKey = decodeURIComponent(fileUrl.replace(/^\/api\/minio\/(preview|stream)\//, ""));
+      if (fileUrl.startsWith("/api/storage/") && (fileUrl.includes("/preview/") || fileUrl.includes("/stream/"))) {
+        const objectKey = decodeURIComponent(fileUrl.replace(/^\/api\/storage\/(preview|stream)\//, ""));
         if (objectKey.length > 500 || objectKey.includes("..") || objectKey.includes("\\")) {
           return res.status(404).json({ error: "Arquivo não encontrado." });
         }
-        const minioConfig = await dbService.getMinioConfig();
-        const bucket = minioConfig.bucket || "armazenamento";
-        const client = getActiveMinioClient();
-        const stat = await client.statObject(bucket, objectKey);
+        const client = getActiveStorageClient();
+        const stat = await client.statObject(STORAGE_BUCKET, objectKey);
         const ext = fileExtOf(objectKey);
         const mime = EXT_TO_MIME[ext] || "application/octet-stream";
         const filename = `${safeTitulo}${ext || ""}`;
@@ -1400,17 +1346,8 @@ app.post("/api/content/download/:id", authenticateUser, async (req: any, res) =>
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
         res.setHeader("Content-Length", String(stat.size));
-        const stream = await client.getObject(bucket, objectKey);
+        const stream = await client.getObject(STORAGE_BUCKET, objectKey);
         stream.pipe(res);
-      } else if (fileUrl.startsWith("/uploads/")) {
-        const filePath = path.join(process.cwd(), "public", fileUrl.replace(/^\/(uploads)\//, "$1"));
-        if (!path.dirname(filePath).startsWith(path.join(process.cwd(), "public", "uploads")) || !fs.existsSync(filePath)) {
-          return res.status(404).json({ error: "Arquivo não encontrado." });
-        }
-        const filename = `${safeTitulo}${path.extname(filePath) || ""}`;
-        res.setHeader("X-Content-Type-Options", "nosniff");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-        res.sendFile(filePath);
       } else {
         return res.status(400).json({ error: "Material sem arquivo válido." });
       }
@@ -1693,11 +1630,11 @@ app.delete("/api/admin/cursos/:id", requireAdmin, async (req: any, res) => {
 
 // 7. Materiais CRUD
 // fileUrl de materiais é servido como link de download ‐ aceita SOMENTE caminhos
-// do próprio site (MinIO/fallback). URLs externas (http/data:/javascript:) são rejeitadas.
+// do próprio site (Supabase Storage). URLs externas (http/data:/javascript:) são rejeitadas.
 function isSafeMaterialFileUrl(value: string): boolean {
   return (
     typeof value === "string" &&
-    (value.startsWith("/api/minio/") || value.startsWith("/api/uploads/") || value.startsWith("/uploads/"))
+    value.startsWith("/api/storage/")
   );
 }
 
@@ -1898,7 +1835,7 @@ app.post("/api/admin/logo/reset", requireAdmin, async (req: any, res) => {
   }
 });
 
-// 8.2 Generic File Upload with MinIO folder support
+// 8.2 Generic File Upload with Storage folder support
 app.post("/api/admin/upload-file", uploadRateLimiter, requireAdmin, async (req: any, res) => {
   const { fileBase64, fileName, folder } = req.body;
   if (!fileBase64) {
@@ -1945,60 +1882,30 @@ app.post("/api/admin/upload-file", uploadRateLimiter, requireAdmin, async (req: 
       return res.status(400).json({ error: "Pasta de destino inválida." });
     }
 
-    // Attempt direct MinIO upload first
-    try {
-      const minioConfig = await dbService.getMinioConfig();
-      const targetBucket = minioConfig.bucket || "armazenamento";
-      const bucketStatus = await ensureMinioBucketExists(targetBucket);
-
-      if (bucketStatus.ready) {
-        const client = getActiveMinioClient();
-        const timestamp = Date.now();
-        const rand = crypto.randomBytes(4).toString("hex");
-        const cleanName = fileName ? fileName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").substring(0, 30) : "file";
-        const objectKey = `${targetFolder}/${timestamp}_${rand}_${cleanName}`;
-        if (objectKey.length > 400) {
-          return res.status(400).json({ error: "Nome do arquivo muito longo." });
-        }
-
-        await client.putObject(targetBucket, objectKey, buffer, buffer.length, {
-          "Content-Type": type
-        });
-
-        const url = type.startsWith("video/")
-          ? `/api/minio/stream/${encodeURIComponent(objectKey)}`
-          : `/api/minio/preview/${encodeURIComponent(objectKey)}`;
-
-        return res.json({ success: true, url, objectKey, storage: "minio" });
-      }
-    } catch (minioErr) {
-      console.warn("[Upload-file MinIO Fallback]:", minioErr);
+    // Upload direto no Supabase Storage (sem fallback em disco)
+    const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
+    if (!bucketStatus.ready) {
+      return res.status(500).json({ error: `Storage indisponível: ${bucketStatus.error || "falha ao verificar bucket"}` });
     }
 
-    // Disk fallback
-    const uploadDir = path.join(process.cwd(), "public/uploads");
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-
-    let ext = "png";
-    if (type === "image/jpeg" || type === "image/jpg") ext = "jpg";
-    else if (type === "image/webp") ext = "webp";
-    else if (type === "image/gif") ext = "gif";
-    else if (type === "application/pdf") ext = "pdf";
-
+    const client = getActiveStorageClient();
     const timestamp = Date.now();
     const rand = crypto.randomBytes(4).toString("hex");
-    const cleanFileName = fileName 
-      ? fileName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").substring(0, 30) 
-      : "upload";
-    const finalFileName = `${cleanFileName}_${timestamp}_${rand}.${ext}`;
-    const filePath = path.join(uploadDir, finalFileName);
+    const cleanName = fileName ? fileName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").substring(0, 30) : "file";
+    const objectKey = `${targetFolder}/${timestamp}_${rand}_${cleanName}`;
+    if (objectKey.length > 400) {
+      return res.status(400).json({ error: "Nome do arquivo muito longo." });
+    }
 
-    fs.writeFileSync(filePath, buffer);
+    await client.putObject(STORAGE_BUCKET, objectKey, buffer, buffer.length, {
+      "Content-Type": type
+    });
 
-    const fileUrl = `/uploads/${finalFileName}`;
-    res.json({ success: true, url: fileUrl });
+    const url = type.startsWith("video/")
+      ? `/api/storage/stream/${encodeURIComponent(objectKey)}`
+      : `/api/storage/preview/${encodeURIComponent(objectKey)}`;
+
+    return res.json({ success: true, url, objectKey, storage: "storage" });
   } catch (err: any) {
     console.error("Erro no upload de arquivo:", err);
     res.status(500).json({ error: "Falha ao salvar o arquivo." });
@@ -2109,7 +2016,7 @@ app.get("/api/fenix-social/post/:id", async (req, res) => {
   }
 });
 
-// Helper for saving base64 files directly to MinIO fenix_social folder
+// Helper for saving base64 files directly to Supabase Storage (fenix_social folder)
 async function saveBase64MediaFile(fileBase64: string): Promise<{ url: string; isVideo: boolean; error?: string }> {
   const matches = fileBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
   if (!matches || matches.length !== 3) {
@@ -2158,36 +2065,20 @@ async function saveBase64MediaFile(fileBase64: string): Promise<{ url: string; i
   const cleanName = `post_${Date.now()}_${uniqueId}.${ext}`;
   const objectKey = `fenix_social/${cleanName}`;
 
-  try {
-    const minioConfig = await dbService.getMinioConfig();
-    const targetBucket = minioConfig.bucket || "armazenamento";
-    const bucketStatus = await ensureMinioBucketExists(targetBucket);
-
-    if (bucketStatus.ready) {
-      const client = getActiveMinioClient();
-      await client.putObject(targetBucket, objectKey, buffer, buffer.length, {
-        "Content-Type": sniffed
-      });
-      const url = isVideo
-        ? `/api/minio/stream/${encodeURIComponent(objectKey)}`
-        : `/api/minio/preview/${encodeURIComponent(objectKey)}`;
-      return { url, isVideo };
-    }
-  } catch (err) {
-    console.warn("[FenixSocial MinIO upload fallback]:", err);
+  // Upload direto no Supabase Storage (sem fallback em disco)
+  const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
+  if (!bucketStatus.ready) {
+    return { url: "", isVideo: false, error: `Storage indisponível: ${bucketStatus.error || "falha ao verificar bucket"}` };
   }
 
-  // Disk fallback
-  const uploadDir = path.join(process.cwd(), "public/uploads/fenix_posts");
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
-
-  const fileName = `fenix_${Date.now()}_${uniqueId}.${ext}`;
-  const filePath = path.join(uploadDir, fileName);
-
-  fs.writeFileSync(filePath, buffer);
-  return { url: `/uploads/fenix_posts/${fileName}`, isVideo };
+  const client = getActiveStorageClient();
+  await client.putObject(STORAGE_BUCKET, objectKey, buffer, buffer.length, {
+    "Content-Type": sniffed
+  });
+  const url = isVideo
+    ? `/api/storage/stream/${encodeURIComponent(objectKey)}`
+    : `/api/storage/preview/${encodeURIComponent(objectKey)}`;
+  return { url, isVideo };
 }
 
 // Create new post (Restricted strictly to logged-in users)
@@ -2375,34 +2266,21 @@ app.post("/api/fenix-social/moderacao/:id/recusar", fenixModeracaoRateLimiter, o
     // Hard delete physical files from server storage
     if (mediaUrls && mediaUrls.length > 0) {
       for (const mediaUrl of mediaUrls) {
-        if (mediaUrl && mediaUrl.startsWith("/uploads/")) {
-          const relativePath = mediaUrl.replace(/^\/uploads\//, "");
-          const fullPath = path.join(process.cwd(), "public", "uploads", relativePath);
-          if (fs.existsSync(fullPath)) {
-            try {
-              fs.unlinkSync(fullPath);
-              console.log(`[Moderação Fênix] Arquivo excluído fisicamente: ${fullPath}`);
-            } catch (unlinkErr) {
-              console.error(`[Moderação Fênix] Falha ao excluir arquivo físico: ${fullPath}`, unlinkErr);
-            }
-          }
-        } else if (mediaUrl && mediaUrl.startsWith("/api/minio/")) {
-          // Conteúdo recusado também deve sumir do MinIO (antes ficava público
-          // pela URL direta). Falha de conexão não quebra a recusa (log only).
+        if (mediaUrl && mediaUrl.startsWith("/api/storage/")) {
+          // Conteúdo recusado também deve sumir do Storage. Falha de conexão
+          // não quebra a recusa (log only).
           try {
-            const rawKey = decodeURIComponent(mediaUrl.replace(/^\/api\/minio\/(stream|preview)\//, "")).split("?")[0];
+            const rawKey = decodeURIComponent(mediaUrl.replace(/^\/api\/storage\/(stream|preview)\//, "")).split("?")[0];
             if (rawKey && !isBackupFamilyKey(rawKey)) {
-              const cfg = await dbService.getMinioConfig();
-              const bucket = cfg.bucket || "armazenamento";
-              const bucketStatus = await ensureMinioBucketExists(bucket);
+              const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
               if (bucketStatus.ready) {
-                const client = getActiveMinioClient();
-                await client.removeObject(bucket, rawKey);
-                console.log(`[Moderação Fênix] Objeto removido do MinIO: ${rawKey}`);
+                const client = getActiveStorageClient();
+                await client.removeObject(STORAGE_BUCKET, rawKey);
+                console.log(`[Moderação Fênix] Objeto removido do Storage: ${rawKey}`);
               }
             }
-          } catch (minioErr) {
-            console.warn("[Moderação Fênix] Não foi possível remover objeto do MinIO (recusa mantida):", minioErr?.message || minioErr);
+          } catch (storageErr) {
+            console.warn("[Moderação Fênix] Não foi possível remover objeto do Storage (recusa mantida):", storageErr?.message || storageErr);
           }
         }
       }
@@ -3451,22 +3329,19 @@ async function buildSupportAnexosFromFiles(files: Express.Multer.File[], ticketI
       tamanhoKb: Math.max(1, Math.round(buffer.length / 1024)),
       mime,
       key: stored.key,
-      localPath: stored.localPath,
       storage: stored.storage,
       isImage: stored.isImage
     });
   }
   return { anexos };
 }
-
-// Armazena no MinIO (pasta suporte-anexos/<ticketId>/) com fallback em disco
-// (data/suporte-anexos/ ‐ fora do público; servido apenas pelas rotas do suporte).
+// Armazena no Supabase Storage (pasta suporte-anexos/<ticketId>/) — sem fallback em disco.
 async function storeSupportAnexo(
   buffer: Buffer,
   originalName: string,
   mime: string,
   ticketId: string
-): Promise<{ key: string; localPath?: string; storage: "minio" | "local"; isImage: boolean }> {
+): Promise<{ key: string; storage: "storage"; isImage: boolean }> {
   const isImage = mime.startsWith("image/");
   const cleanName = path
     .basename(originalName || "anexo")
@@ -3479,22 +3354,13 @@ async function storeSupportAnexo(
   const rand = crypto.randomBytes(6).toString("hex");
   const ts = Date.now();
   const objectKey = `suporte-anexos/${ticketId}/${ts}_${rand}_${cleanName}`;
-  try {
-    const minioConfig = await dbService.getMinioConfig();
-    const targetBucket = minioConfig.bucket || "armazenamento";
-    const bucketStatus = await ensureMinioBucketExists(targetBucket);
-    if (bucketStatus.ready) {
-      await getActiveMinioClient().putObject(targetBucket, objectKey, buffer, buffer.length, { "Content-Type": mime });
-      return { key: objectKey, storage: "minio", isImage };
-    }
-  } catch (minioErr) {
-    console.warn("[Suporte Anexo MinIO Fallback]:", minioErr?.message || minioErr);
+
+  const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
+  if (!bucketStatus.ready) {
+    throw new Error(`Storage indisponível: ${bucketStatus.error || "falha ao verificar bucket"}`);
   }
-  const uploadDir = path.join(process.cwd(), "data", "suporte-anexos");
-  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-  const fileName = `${ts}_${rand}_${cleanName}`;
-  fs.writeFileSync(path.join(uploadDir, fileName), buffer);
-  return { key: fileName, localPath: fileName, storage: "local", isImage };
+  await getActiveStorageClient().putObject(STORAGE_BUCKET, objectKey, buffer, buffer.length, { "Content-Type": mime });
+  return { key: objectKey, storage: "storage", isImage };
 }
 
 // Anexa arquivos a uma mensagem do chamado (staff responde OU D.I. envia)
@@ -3561,22 +3427,14 @@ app.get("/api/support/tickets/:id/anexos/:anexoId", authenticateUser, async (req
     // Sempre attachment: no chat nada abre direto ‐ o usuário baixa e depois visualiza.
     res.setHeader("Content-Type", anexo.mime || "application/octet-stream");
     res.setHeader("Content-Disposition", `attachment; filename="${nome.replace(/"/g, "")}"`);
-    if (anexo.storage === "minio") {
-      const minioConfig = await dbService.getMinioConfig();
-      const bucket = minioConfig.bucket || "armazenamento";
-      const stream = await getActiveMinioClient().getObject(bucket, anexo.key);
-      stream.pipe(res);
-    } else {
-      const filePath = path.join(process.cwd(), "data", "suporte-anexos", path.basename(anexo.localPath || anexo.key));
-      if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Arquivo não encontrado." });
-      res.send(fs.readFileSync(filePath));
-    }
+    const stream = await getActiveStorageClient().getObject(STORAGE_BUCKET, anexo.key);
+    stream.pipe(res);
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao entregar o anexo." });
   }
 });
 
-// Sanitiza nomes para o objeto MinIO: sem acentos/caracteres especiais
+// Sanitiza nomes para o objeto no Storage: sem acentos/caracteres especiais
 function sanitizeFilePart(text: string, maxLen = 60): string {
   const normalized = (text || "")
     .normalize("NFD")
@@ -3669,7 +3527,7 @@ function buildSupportTicketPdf(ticket: any): Buffer {
 }
 
 // Backup do suporte: chamados fechados -> 1 PDF por chamado (nome do D.I. + código +
-// data de fechamento) -> ZIP -> pasta backup-suporte/ no MinIO (organizado por data).
+// data de fechamento) -> ZIP -> pasta backup-suporte/ no Storage (organizado por data).
 // È uma CÏPIA de segurança: os chamados permanecem no banco (auditoria imutável).
 app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
   try {
@@ -3694,16 +3552,14 @@ app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
     const zipName = `backup-suporte_${dataPart}_${pad(now.getHours())}h${pad(now.getMinutes())}.zip`;
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
 
-    const minioConfig = await dbService.getMinioConfig();
-    const targetBucket = minioConfig.bucket || "armazenamento";
-    const bucketStatus = await ensureMinioBucketExists(targetBucket);
+    const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
     if (!bucketStatus.ready) {
-      return res.status(500).json({ error: "Bucket do MinIO não está disponível para o backup." });
+      return res.status(500).json({ error: "Bucket do Supabase Storage não está disponível para o backup." });
     }
 
     const objectKey = `backup-suporte/${dataPath}/${zipName}`;
-    const client = getActiveMinioClient();
-    await client.putObject(targetBucket, objectKey, zipBuffer, zipBuffer.length, {
+    const client = getActiveStorageClient();
+    await client.putObject(STORAGE_BUCKET, objectKey, zipBuffer, zipBuffer.length, {
       "Content-Type": "application/zip"
     });
 
@@ -3718,7 +3574,7 @@ app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
       count: fechados.length,
       arquivo: objectKey,
       // Download agora passa pela rota admin (/api/admin/backup/suporte-download/*).
-      // A URL pública /api/minio/stream é bloqueada por isBackupFamilyKey.
+      // A URL pública /api/storage/stream é bloqueada por isBackupFamilyKey.
       rel: objectKey.replace("backup-suporte/", ""),
       tamanhoKb: Math.round(zipBuffer.length / 1024)
     });
@@ -4162,7 +4018,7 @@ app.post("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req:
   }
 });
 
-// ---------------- MINIO S3 OBJECT STORAGE & STREAMING ENDPOINTS ----------------
+// ---------------- SUPABASE STORAGE & STREAMING ENDPOINTS ----------------
 
 // ==========================================
 // NOTIFICAÆÑES POR E-MAIL (config admin ‐ destinos + toggles + status SMTP)
@@ -4238,48 +4094,38 @@ app.post("/api/admin/support/email-test", requireAdmin, async (req: any, res) =>
   }
 });
 
-// ---------------- MINIO S3 OBJECT STORAGE & STREAMING ENDPOINTS ----------------
+// ---------------- SUPABASE STORAGE & STREAMING ENDPOINTS ----------------
 
 // ==========================================
-// STATUS DAS INTEGRAÆÑES (MinIO + Vimeo)
+// STATUS DAS INTEGRAÇÕES (Supabase Storage + Vimeo)
 // ==========================================
-// Verifica conectividade real SEM expor nenhuma credencial (accessKey, secretKey,
-// token, client secret nunca saem do servidor). As credenciais vivem em variáveis
-// de ambiente (MINIO_*/VIMEO_*) com fallback no config do banco (legado).
+// Verifica conectividade real SEM expor nenhuma credencial (token, client
+// secret nunca saem do servidor).
 app.get("/api/admin/integrations/status", requireAdmin, async (req: any, res) => {
   try {
     const dateStr = new Date().toISOString();
-    const [minioCfg, vimeoCfg] = await Promise.all([
-      dbService.getMinioConfig(),
-      dbService.getVimeoConfig()
-    ]);
+    const vimeoCfg = await dbService.getVimeoConfig();
 
-    const minioEnv = !!process.env.MINIO_ENDPOINT && !!process.env.MINIO_ACCESS_KEY && !!process.env.MINIO_SECRET_KEY;
-    const minioDb = !!minioCfg.endpoint && !!minioCfg.accessKey && !!minioCfg.secretKey;
-    const minioSource = minioEnv ? "env" : minioDb ? "db" : "none";
-
-    const minio = {
-      configured: minioSource !== "none",
-      source: minioSource,
+    const storage = {
+      configured: true,
+      source: "env",
       online: false,
-      message: "Não configurado ‐ configure as variáveis MINIO_* no .env (ou restaure a configuração antiga no banco).",
-      endpoint: minioCfg.endpoint || "",
-      bucket: minioCfg.bucket || "armazenamento",
-      region: minioCfg.region || "",
+      message: "Supabase Storage não respondeu.",
+      endpoint: process.env.SUPABASE_URL || "",
+      bucket: STORAGE_BUCKET,
+      region: "",
       latencyMs: null as number | null,
       lastCheckedAt: dateStr
     };
 
-    if (minioSource !== "none") {
-      const t0 = Date.now();
-      const testRes = await testMinioConnection(minioCfg);
-      minio.latencyMs = Date.now() - t0;
-      if (Array.isArray(testRes.buckets)) {
-        minio.online = true;
-        minio.message = `Conectado ‐ ${testRes.buckets.length} bucket(s) acessíveis no servidor.`;
-      } else {
-        minio.message = "Servidor não respondeu. O modo de resiliência segue ativo (uploads caem no armazenamento local).";
-      }
+    const t0 = Date.now();
+    const testRes = await testStorageConnection();
+    storage.latencyMs = Date.now() - t0;
+    if (testRes.success && Array.isArray(testRes.buckets)) {
+      storage.online = true;
+      storage.message = `Conectado ‐ ${testRes.buckets.length} bucket(s) acessíveis no servidor.`;
+    } else {
+      storage.message = testRes.message || "Supabase Storage não respondeu.";
     }
 
     const vimeoEnv = !!process.env.VIMEO_ACCESS_TOKEN || !!process.env.VIMEO_CLIENT_ID;
@@ -4320,18 +4166,18 @@ app.get("/api/admin/integrations/status", requireAdmin, async (req: any, res) =>
       }
     }
 
-    return res.json({ minio, vimeo });
+    return res.json({ storage, vimeo });
   } catch (err: any) {
     console.error("[integrations/status]", err);
     return res.status(500).json({ error: "Erro ao verificar o status das integrações." });
   }
 });
 
-// Multipart / Buffer / Base64 Direct Upload to MinIO with Folder Structure
+// Multipart / Buffer / Base64 Direct Upload to Supabase Storage with Folder Structure
 // Somente ADMIN: permite gravar em qualquer pasta da allowlist (inclusive
 // materiais/ e cursos/videos). Usuários comuns têm rotas próprias com escopo
 // fixo (fenix_social via /api/fenix-social/posts, anexos via /api/support/*).
-app.post("/api/minio/upload", uploadRateLimiter, requireAdmin, uploadMulter.single("file"), async (req: any, res) => {
+app.post("/api/storage/upload", uploadRateLimiter, requireAdmin, uploadMulter.single("file"), async (req: any, res) => {
   try {
     let fileBuffer: Buffer | null = null;
     let fileName = "arquivo";
@@ -4364,8 +4210,6 @@ app.post("/api/minio/upload", uploadRateLimiter, requireAdmin, uploadMulter.sing
       return res.status(400).json({ error: validation.error || "Arquivo rejeitado." });
     }
 
-    const minioConfig = await dbService.getMinioConfig();
-    const targetBucket = minioConfig.bucket || "armazenamento";
     const cleanName = fileName.toLowerCase().replace(/[^a-z0-9_.-]/g, "_");
     const timestamp = Date.now();
     const rand = crypto.randomBytes(4).toString("hex");
@@ -4375,65 +4219,45 @@ app.post("/api/minio/upload", uploadRateLimiter, requireAdmin, uploadMulter.sing
     }
     const isVideo = mimeType.startsWith("video/");
 
-    const bucketStatus = await ensureMinioBucketExists(targetBucket);
-
-    if (bucketStatus.ready) {
-      try {
-        const client = getActiveMinioClient();
-
-        await client.putObject(targetBucket, objectKey, fileBuffer, fileBuffer.length, {
-          "Content-Type": mimeType
-        });
-
-        const previewUrl = `/api/minio/preview/${encodeURIComponent(objectKey)}`;
-        const streamUrl = `/api/minio/stream/${encodeURIComponent(objectKey)}`;
-        const hlsUrl = `/api/minio/hls/master.m3u8?key=${encodeURIComponent(objectKey)}`;
-
-        return res.json({
-          success: true,
-          storage: "minio",
-          bucket: targetBucket,
-          objectKey,
-          mimeType,
-          url: isVideo ? streamUrl : previewUrl,
-          previewUrl,
-          streamUrl,
-          hlsUrl: isVideo ? hlsUrl : undefined
-        });
-      } catch (uploadErr: any) {
-        console.warn("[MinIO Upload Error]:", uploadErr?.message || uploadErr);
-      }
+    const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
+    if (!bucketStatus.ready) {
+      return res.status(500).json({ error: `Storage indisponível: ${bucketStatus.error || "falha ao verificar bucket"}` });
     }
 
-    // Disk fallback storage (Instant, silent resilience)
-    const localSubDir = path.join(uploadsDir, folder);
-    if (!fs.existsSync(localSubDir)) {
-      fs.mkdirSync(localSubDir, { recursive: true });
+    try {
+      const client = getActiveStorageClient();
+
+      await client.putObject(STORAGE_BUCKET, objectKey, fileBuffer, fileBuffer.length, {
+        "Content-Type": mimeType
+      });
+
+      const previewUrl = `/api/storage/preview/${encodeURIComponent(objectKey)}`;
+      const streamUrl = `/api/storage/stream/${encodeURIComponent(objectKey)}`;
+      const hlsUrl = `/api/storage/hls/master.m3u8?key=${encodeURIComponent(objectKey)}`;
+
+      return res.json({
+        success: true,
+        storage: "storage",
+        bucket: STORAGE_BUCKET,
+        objectKey,
+        mimeType,
+        url: isVideo ? streamUrl : previewUrl,
+        previewUrl,
+        streamUrl,
+        hlsUrl: isVideo ? hlsUrl : undefined
+      });
+    } catch (uploadErr: any) {
+      console.error("[Storage Upload Error]:", uploadErr?.message || uploadErr);
+      return res.status(500).json({ error: `Falha ao gravar arquivo no Storage: ${uploadErr?.message || uploadErr}` });
     }
-    const localFileName = `${timestamp}_${cleanName}`;
-    const localPath = path.join(localSubDir, localFileName);
-    fs.writeFileSync(localPath, fileBuffer);
-
-    const localUrl = `/api/uploads/${folder}/${localFileName}`;
-
-    return res.json({
-      success: true,
-      storage: "fallback_local",
-      objectKey,
-      mimeType,
-      url: localUrl,
-      previewUrl: localUrl,
-      streamUrl: localUrl,
-      warning: `MinIO recusou a conexão (${bucketStatus.error || 'Falha no MinIO'}). O arquivo foi gravado no armazenamento resiliente local.`
-    });
   } catch (err: any) {
-    console.error("Erro ao realizar upload no MinIO:", err);
+    console.error("Erro ao realizar upload no Storage:", err);
     res.status(500).json({ error: "Falha ao gravar arquivo no armazenamento." });
   }
 });
 
 // Objetos das famílias de backup (backups-site/, backups-banco/, backup-suporte/)
-// contêm dados sensíveis (configs com minioConfig/vimeoConfig/supportTickets,
+// contêm dados sensíveis (configs com vimeoConfig/supportTickets,
 // contas, audit_logs, conversas completas de suporte) e NUNCA são servidos
 // pelas rotas públicas de mídia ‐ somente pelas rotas admin
 // (/api/admin/backup/*download). Anexos do suporte (suporte-anexos/) também são
@@ -4444,7 +4268,7 @@ function isBackupFamilyKey(objectKey: string): boolean {
   return BACKUP_FAMILY_PREFIXES.some((p) => objectKey.startsWith(p));
 }
 
-// Serve Images / Documents directly from MinIO
+// Serve Images / Documents directly from Supabase Storage
 // Mídias de material (pasta materiais/*) são protegidas: só servidas com sessão
 // válida (cookie httpOnly OU Authorization Bearer ‐ o mesmo fallback do
 // authenticateUser, para <img>/<video>/<a href> seguirem funcionando). Anônimos
@@ -4480,53 +4304,45 @@ function isMaterialMediaAllowed(req: any, res: any): boolean {
   return !!handleRefreshFlow(req, res);
 }
 
-// --- Proteção contra travamento do MinIO remoto sob concorrência ---
-// Quando o MinIO remoto fica lento/fora (ex.: rede), as requisições simultâneas
+// --- Proteção contra travamento do Storage remoto sob concorrência ---
+// Quando o Storage fica lento/fora (ex.: rede), as requisições simultâneas
 // (ex.: 7 imagens da home) seguram os 6 sockets HTTP do navegador por host e
 // deixam as views lazy (Suspense) parecendo travadas. Um timeout curto nas
 // chamadas remotas garante que os sockets sejam liberados em poucos segundos;
-// a config é cacheada (evita query Supabase por request) e previews pequenos
-// ficam em memória (revisitas instantâneas).
-let minioConfigCache: { cfg: Awaited<ReturnType<typeof dbService.getMinioConfig>>; time: number } | null = null;
-async function getMinioConfigCached(): Promise<Awaited<ReturnType<typeof dbService.getMinioConfig>>> {
-  if (minioConfigCache && Date.now() - minioConfigCache.time < 15_000) return minioConfigCache.cfg;
-  const cfg = await dbService.getMinioConfig();
-  minioConfigCache = { cfg, time: Date.now() };
-  return cfg;
-}
+// previews pequenos ficam em memória (revisitas instantâneas).
 
-const MINIO_PREVIEW_CACHE_MAX_ITEMS = 200;
-const MINIO_PREVIEW_CACHE_MAX_BYTES = 128 * 1024 * 1024;
-const MINIO_PREVIEW_CACHE_MAX_FILE = 4 * 1024 * 1024;
-const MINIO_PREVIEW_CACHE_TTL = 60 * 60 * 1000;
-const minioPreviewCache = new Map<string, { data: Buffer; mime: string; time: number }>();
-let minioPreviewCacheBytes = 0;
-function minioPreviewCacheGet(key: string) {
-  const hit = minioPreviewCache.get(key);
+const STORAGE_PREVIEW_CACHE_MAX_ITEMS = 200;
+const STORAGE_PREVIEW_CACHE_MAX_BYTES = 128 * 1024 * 1024;
+const STORAGE_PREVIEW_CACHE_MAX_FILE = 4 * 1024 * 1024;
+const STORAGE_PREVIEW_CACHE_TTL = 60 * 60 * 1000;
+const storagePreviewCache = new Map<string, { data: Buffer; mime: string; time: number }>();
+let storagePreviewCacheBytes = 0;
+function storagePreviewCacheGet(key: string) {
+  const hit = storagePreviewCache.get(key);
   if (!hit) return null;
-  if (Date.now() - hit.time > MINIO_PREVIEW_CACHE_TTL) {
-    minioPreviewCache.delete(key);
-    minioPreviewCacheBytes -= hit.data.length;
+  if (Date.now() - hit.time > STORAGE_PREVIEW_CACHE_TTL) {
+    storagePreviewCache.delete(key);
+    storagePreviewCacheBytes -= hit.data.length;
     return null;
   }
   return hit;
 }
-function minioPreviewCacheSet(key: string, data: Buffer, mime: string) {
-  if (data.length > MINIO_PREVIEW_CACHE_MAX_FILE) return;
-  const old = minioPreviewCache.get(key);
-  if (old) minioPreviewCacheBytes -= old.data.length;
-  minioPreviewCache.set(key, { data, mime, time: Date.now() });
-  minioPreviewCacheBytes += data.length;
-  while (minioPreviewCache.size > MINIO_PREVIEW_CACHE_MAX_ITEMS || minioPreviewCacheBytes > MINIO_PREVIEW_CACHE_MAX_BYTES) {
-    const firstKey = minioPreviewCache.keys().next().value as string | undefined;
+function storagePreviewCacheSet(key: string, data: Buffer, mime: string) {
+  if (data.length > STORAGE_PREVIEW_CACHE_MAX_FILE) return;
+  const old = storagePreviewCache.get(key);
+  if (old) storagePreviewCacheBytes -= old.data.length;
+  storagePreviewCache.set(key, { data, mime, time: Date.now() });
+  storagePreviewCacheBytes += data.length;
+  while (storagePreviewCache.size > STORAGE_PREVIEW_CACHE_MAX_ITEMS || storagePreviewCacheBytes > STORAGE_PREVIEW_CACHE_MAX_BYTES) {
+    const firstKey = storagePreviewCache.keys().next().value as string | undefined;
     if (!firstKey) break;
-    const evicted = minioPreviewCache.get(firstKey);
-    minioPreviewCache.delete(firstKey);
-    if (evicted) minioPreviewCacheBytes -= evicted.data.length;
+    const evicted = storagePreviewCache.get(firstKey);
+    storagePreviewCache.delete(firstKey);
+    if (evicted) storagePreviewCacheBytes -= evicted.data.length;
   }
 }
 
-app.get("/api/minio/preview/*", async (req, res) => {
+app.get("/api/storage/preview/*", async (req, res) => {
   try {
     const rawKey = req.params[0];
     if (!rawKey) return res.status(400).json({ error: "Chave do arquivo ausente." });
@@ -4536,16 +4352,16 @@ app.get("/api/minio/preview/*", async (req, res) => {
       return res.status(400).json({ error: "Chave do arquivo inválida." });
     }
     if (isBackupFamilyKey(objectKey)) {
-      return res.status(404).json({ error: "Arquivo não encontrado no servidor MinIO." });
+      return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
     }
     if (objectKey.startsWith("materiais/") && !isMaterialMediaAllowed(req, res)) {
-      return res.status(404).json({ error: "Arquivo não encontrado no servidor MinIO." });
+      return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
     }
 
     const ext = fileExtOf(objectKey);
     const mime = EXT_TO_MIME[ext] || "application/octet-stream";
 
-    const cacheHit = minioPreviewCacheGet(objectKey);
+    const cacheHit = storagePreviewCacheGet(objectKey);
     if (cacheHit) {
       res.setHeader("Content-Type", cacheHit.mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
@@ -4553,23 +4369,19 @@ app.get("/api/minio/preview/*", async (req, res) => {
       return res.end(cacheHit.data);
     }
 
-    const minioConfig = await getMinioConfigCached();
-    // Bucket SEMPRE vindo da config do servidor ‐ o cliente nunca escolhe bucket
-    const bucket = minioConfig.bucket || "armazenamento";
+    const client = getActiveStorageClient();
 
-const client = getActiveMinioClient();
-
-    const stat = await withTimeout(client.statObject(bucket, objectKey), 1500, "Timeout no MinIO");
+    const stat = await withTimeout(client.statObject(STORAGE_BUCKET, objectKey), 1500, "Timeout no Storage");
     const dispositionHeaders = () => {
       if (!INLINE_MEDIA_EXT.has(ext) && !objectKey.startsWith("fenix_social/")) {
         const safeName = path.basename(objectKey).replace(/[\r\n"]/g, "_");
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
       }
     };
-    if (stat.size <= MINIO_PREVIEW_CACHE_MAX_FILE) {
+    if (stat.size <= STORAGE_PREVIEW_CACHE_MAX_FILE) {
       const data = await withTimeout(
         (async () => {
-          const stream = await client.getObject(bucket, objectKey);
+          const stream = await client.getObject(STORAGE_BUCKET, objectKey);
           const chunks: Buffer[] = [];
           for await (const chunk of stream) {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -4577,9 +4389,9 @@ const client = getActiveMinioClient();
           return Buffer.concat(chunks);
         })(),
         4000,
-          "Timeout no MinIO"
+          "Timeout no Storage"
       );
-      minioPreviewCacheSet(objectKey, data, mime);
+      storagePreviewCacheSet(objectKey, data, mime);
       res.setHeader("Content-Type", mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cache-Control", "public, max-age=86400");
@@ -4590,16 +4402,16 @@ const client = getActiveMinioClient();
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cache-Control", "public, max-age=86400");
       dispositionHeaders();
-      const stream = await client.getObject(bucket, objectKey);
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey);
       stream.pipe(res);
     }
   } catch (err: any) {
-    res.status(404).json({ error: "Arquivo não encontrado no servidor MinIO." });
+    res.status(404).json({ error: "Arquivo não encontrado no Storage." });
   }
 });
 
 // Stream Video / Audio with Range Requests support
-app.get("/api/minio/stream/*", async (req, res) => {
+app.get("/api/storage/stream/*", async (req, res) => {
   try {
     const rawKey = req.params[0];
     if (!rawKey) return res.status(400).json({ error: "Chave do arquivo ausente." });
@@ -4609,18 +4421,14 @@ app.get("/api/minio/stream/*", async (req, res) => {
       return res.status(400).json({ error: "Chave do arquivo inválida." });
     }
     if (isBackupFamilyKey(objectKey)) {
-      return res.status(404).json({ error: "Mídia/Vídeo não encontrado no MinIO." });
+      return res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
     }
     if (objectKey.startsWith("materiais/") && !isMaterialMediaAllowed(req, res)) {
-      return res.status(404).json({ error: "Mídia/Vídeo não encontrado no MinIO." });
+      return res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
     }
 
-    const minioConfig = await getMinioConfigCached();
-    // Bucket SEMPRE vindo da config do servidor ‐ o cliente nunca escolhe bucket
-    const bucket = minioConfig.bucket || "armazenamento";
-
-    const client = getActiveMinioClient();
-    const stat = await withTimeout(client.statObject(bucket, objectKey), 1500, "Timeout no MinIO");
+    const client = getActiveStorageClient();
+    const stat = await withTimeout(client.statObject(STORAGE_BUCKET, objectKey), 1500, "Timeout no Storage");
     const fileSize = stat.size;
     const ext = fileExtOf(objectKey);
     const contentType = EXT_TO_MIME[ext] || "video/mp4";
@@ -4650,7 +4458,7 @@ app.get("/api/minio/stream/*", async (req, res) => {
         ...streamHeaders
       });
 
-      const stream = await client.getPartialObject(bucket, objectKey, start, chunkSize);
+      const stream = await client.getPartialObject(STORAGE_BUCKET, objectKey, start, chunkSize);
       stream.pipe(res);
     } else {
       res.writeHead(200, {
@@ -4658,22 +4466,22 @@ app.get("/api/minio/stream/*", async (req, res) => {
         ...streamHeaders
       });
 
-      const stream = await client.getObject(bucket, objectKey);
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey);
       stream.pipe(res);
     }
   } catch (err: any) {
-    res.status(404).json({ error: "Mídia/Vídeo não encontrado no MinIO." });
+    res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
   }
 });
 
 // Adaptive HLS Video Streaming Generator & Proxy (.m3u8 + .ts segments)
 const activeHlsJobs = new Map<string, Promise<boolean>>();
 
-app.get("/api/minio/hls/master.m3u8", async (req, res) => {
+app.get("/api/storage/hls/master.m3u8", async (req, res) => {
   try {
     const key = req.query.key as string;
     if (!key) return res.status(400).json({ error: "Chave do arquivo ausente" });
-    // Chaves de objeto MinIO não podem conter sequências de travessia nem voltar ao bucket
+    // Chaves de objeto não podem conter sequências de travessia nem voltar ao bucket
     if (key.length > 500 || key.includes("..") || key.includes("\\") || key.includes("%")) {
       return res.status(400).json({ error: "Chave do arquivo inválida." });
     }
@@ -4684,11 +4492,7 @@ app.get("/api/minio/hls/master.m3u8", async (req, res) => {
       return res.status(404).json({ error: "Playlist não encontrada." });
     }
 
-    const minioConfig = await dbService.getMinioConfig();
-    // Bucket SEMPRE vindo da config do servidor ‐ o cliente nunca escolhe bucket
-    const bucket = minioConfig.bucket || "armazenamento";
-
-    const hash = crypto.createHash("md5").update(`${bucket}:${key}`).digest("hex");
+    const hash = crypto.createHash("md5").update(`${STORAGE_BUCKET}:${key}`).digest("hex");
     const cacheDir = path.join("/tmp/hls_cache", hash);
     const playlistPath = path.join(cacheDir, "index.m3u8");
 
@@ -4708,7 +4512,7 @@ app.get("/api/minio/hls/master.m3u8", async (req, res) => {
 
       if (!activeHlsJobs.has(hash)) {
         const jobPromise = (async () => {
-          const streamUrl = `http://127.0.0.1:${PORT}/api/minio/stream/${encodeURIComponent(key)}`;
+          const streamUrl = `http://127.0.0.1:${PORT}/api/storage/stream/${encodeURIComponent(key)}`;
 
           const runFFmpeg = (args: string[]) => new Promise<boolean>((resolve) => {
             // Header interno: o request de stream do ffmpeg (loopback) só passa
@@ -4750,7 +4554,7 @@ app.get("/api/minio/hls/master.m3u8", async (req, res) => {
 #EXT-X-MEDIA-SEQUENCE:0
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXTINF:10.0,
-/api/minio/stream/${encodeURIComponent(key)}
+/api/storage/stream/${encodeURIComponent(key)}
 #EXT-X-ENDLIST`;
             fs.writeFileSync(playlistPath, fallbackPlaylist, "utf8");
             return true;
@@ -4773,7 +4577,7 @@ app.get("/api/minio/hls/master.m3u8", async (req, res) => {
     }
 
     const rawPlaylist = fs.readFileSync(playlistPath, "utf8");
-    const rewrittenPlaylist = rawPlaylist.replace(/(seg_\d+\.ts)/g, `/api/minio/hls/segment/${hash}/$1`);
+    const rewrittenPlaylist = rawPlaylist.replace(/(seg_\d+\.ts)/g, `/api/storage/hls/segment/${hash}/$1`);
 
     res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
     res.setHeader("Cache-Control", "no-cache");
@@ -4784,7 +4588,7 @@ app.get("/api/minio/hls/master.m3u8", async (req, res) => {
 });
 
 // Serve HLS .ts video segments
-app.get("/api/minio/hls/segment/:hash/:segment", (req, res) => {
+app.get("/api/storage/hls/segment/:hash/:segment", (req, res) => {
   const { hash, segment } = req.params;
 
   // Strict validation: hash = md5 hex gerado pelo servidor; segment = seg_%03d.ts
