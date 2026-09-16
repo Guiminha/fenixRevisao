@@ -218,8 +218,8 @@ export default function PaginaBlocos({
           <div key={bloco.id} className="relative overflow-hidden rounded-[1.5rem] border border-white/[0.06] bg-[#0d1117]/70 shadow-xl min-h-[280px]">
             <FundoDecorativo cor={campos.cor || "rosa"} />
             <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 items-center gap-8 lg:gap-10 p-6 sm:p-10">
-              <div className={`lg:col-span-7 space-y-4 text-center lg:text-left ${imagemEsquerda ? "order-2 lg:order-1" : "order-2"}`}>
-                <div className="flex items-center justify-center lg:justify-start gap-4">
+              <div className={`${campos.imagem ? "lg:col-span-7" : "lg:col-span-12"} space-y-4 text-center ${imagemEsquerda ? "order-2 lg:order-1" : "order-2"}${campos.imagem ? " lg:text-left" : ""}`}>
+                <div className={`flex items-center justify-center gap-4 ${campos.imagem ? "lg:justify-start" : ""}`}>
                   {campos.icone && (
                     <span className={`w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center ${cor.blob} border ${cor.ring}`}>
                       <Icone nome={campos.icone} className={`w-7 h-7 ${cor.fg}`} />
@@ -295,9 +295,9 @@ export default function PaginaBlocos({
                 {campos.eyebrow && <span className="text-[clamp(0.75rem,1vw,0.9rem)] font-bold tracking-[0.25em] uppercase block text-[#ff719e]">{campos.eyebrow}</span>}
                 {campos.titulo && <h3 className="text-[clamp(1.5rem,2.8vw,5rem)] font-bold text-white font-display tracking-tight">{campos.titulo}</h3>}
               </div>
-              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4 text-left">
+              <div className="grid sm:grid-cols-2 gap-x-8 gap-y-4 justify-items-center text-center">
                 {(campos.itens || []).map((item, i) => (
-                  <div key={i} className="flex items-start gap-3">
+                  <div key={i} className="flex items-center justify-center gap-3 max-w-md">
                     <CheckCircle2 className="w-5 h-5 text-[#d12a62] shrink-0 mt-0.5" />
                     <span className="text-[clamp(0.95rem,1.3vw,1.1rem)] text-slate-200 leading-relaxed">{item}</span>
                   </div>

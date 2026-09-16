@@ -1,4 +1,15 @@
-import * as Minio from "minio";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { Readable } from "node:stream";
+
+// ====================================================================
+// Serviço de armazenamento baseado em Supabase Storage (SELF-HOSTED).
+// Substitui o cliente MinIO mantendo a MESMA superfície de API
+// (getActiveMinioClient etc.) para não quebrar server.ts/backupService.ts.
+//
+// O objeto retornado por getActiveMinioClient() é compatível com os
+// métodos usados no código: putObject, getObject, statObject,
+// getPartialObject, listObjectsV2, removeObject.
+// ====================================================================
 
 export interface MinioConfig {
   endpoint: string;
@@ -11,9 +22,6 @@ export interface MinioConfig {
   consoleUrl: string;
 }
 
-// As credenciais NUNCA ficam hardcoded. São resolvidas por
-// dbService.getMinioConfig(): env MINIO_* primeiro, config do banco depois,
-// e este fallback vazio apenas como último recurso (conexão falha → modo resiliência).
 export const defaultConfig: MinioConfig = {
   endpoint: "",
   port: 9000,
@@ -26,146 +34,136 @@ export const defaultConfig: MinioConfig = {
 };
 
 let activeConfig: MinioConfig = { ...defaultConfig };
-let minioClientInstance: Minio.Client | null = null;
+let supabaseClient: SupabaseClient | null = null;
+
+function storage(): SupabaseClient {
+  if (supabaseClient) return supabaseClient;
+  const url = process.env.SUPABASE_URL || "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  supabaseClient = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  return supabaseClient;
+}
 
 export function parseMinioEndpoint(rawUrl: string, rawPort?: number, rawUseSSL?: boolean): { endPoint: string; port: number; useSSL: boolean } {
   let cleanUrl = rawUrl.trim();
   let useSSL = rawUseSSL !== undefined ? rawUseSSL : false;
   let port = rawPort || 9000;
-
-  if (cleanUrl.startsWith("https://")) {
-    useSSL = true;
-    cleanUrl = cleanUrl.replace("https://", "");
-  } else if (cleanUrl.startsWith("http://")) {
-    useSSL = false;
-    cleanUrl = cleanUrl.replace("http://", "");
-  }
-
-  // Remove trailing slashes
+  if (cleanUrl.startsWith("https://")) { useSSL = true; cleanUrl = cleanUrl.replace("https://", ""); }
+  else if (cleanUrl.startsWith("http://")) { useSSL = false; cleanUrl = cleanUrl.replace("http://", ""); }
   cleanUrl = cleanUrl.replace(/\/+$/, "");
-
-  // Check if port is embedded in host e.g. 169.58.13.160:9000
-  if (cleanUrl.includes(":")) {
-    const parts = cleanUrl.split(":");
-    cleanUrl = parts[0];
-    const parsedPort = parseInt(parts[1], 10);
-    if (!isNaN(parsedPort)) {
-      port = parsedPort;
-    }
-  }
-
+  if (cleanUrl.includes(":")) { const p = cleanUrl.split(":"); cleanUrl = p[0]; const pp = parseInt(p[1], 10); if (!isNaN(pp)) port = pp; }
   return { endPoint: cleanUrl, port, useSSL };
 }
 
-export function initMinioClient(config: MinioConfig): Minio.Client {
-  const { endPoint, port, useSSL } = parseMinioEndpoint(config.endpoint || "127.0.0.1", config.port, config.useSSL);
-
-  activeConfig = { ...config };
-  minioClientInstance = new Minio.Client({
-    endPoint,
-    port,
-    useSSL,
-    accessKey: config.accessKey,
-    secretKey: config.secretKey,
-    region: config.region || "us-east-1"
-  });
-
-  return minioClientInstance;
+export interface MinioCompatibleClient {
+  putObject(bucket: string, key: string, buffer: Buffer, size?: number, meta?: any): Promise<any>;
+  statObject(bucket: string, key: string): Promise<{ size: number; metaData: any; lastModified: Date }>;
+  getObject(bucket: string, key: string): Promise<Readable>;
+  getPartialObject(bucket: string, key: string, offset: number, length: number): Promise<Readable>;
+  removeObject(bucket: string, key: string): Promise<any>;
+  listObjectsV2(bucket: string, prefix?: string, recursive?: boolean): AsyncIterable<any>;
+  bucketExists(bucket: string): Promise<boolean>;
+  makeBucket(bucket: string, region?: string): Promise<any>;
+  listBuckets(): Promise<{ name: string }[]>;
 }
 
-export function getActiveMinioClient(): Minio.Client {
-  if (!minioClientInstance) {
-    return initMinioClient(activeConfig);
-  }
-  return minioClientInstance;
+export function initMinioClient(config: MinioConfig): MinioCompatibleClient {
+  activeConfig = { ...config };
+  return getActiveMinioClient();
+}
+
+// Retorna um objeto compatível com o cliente MinIO, mas apoiado no Storage.
+export function getActiveMinioClient(): MinioCompatibleClient {
+  const sb = storage();
+  return {
+    async putObject(bucket: string, key: string, buffer: Buffer, _size?: number, meta?: any) {
+      const contentType = (meta && meta["Content-Type"]) || "application/octet-stream";
+      const { error } = await sb.storage.from(bucket).upload(key, buffer, { contentType, upsert: true });
+      if (error) throw new Error(error.message);
+      return { etag: "" };
+    },
+    async statObject(bucket: string, key: string) {
+      const { data, error } = await sb.storage.from(bucket).download(key);
+      if (error) throw new Error(error.message);
+      const buf = Buffer.from(await data.arrayBuffer());
+      return { size: buf.length, metaData: {}, lastModified: new Date() };
+    },
+    async getObject(bucket: string, key: string): Promise<Readable> {
+      const { data, error } = await sb.storage.from(bucket).download(key);
+      if (error) throw new Error(error.message);
+      const buf = Buffer.from(await data.arrayBuffer());
+      return Readable.from(buf);
+    },
+    async getPartialObject(bucket: string, key: string, offset: number, length: number): Promise<Readable> {
+      const { data, error } = await sb.storage.from(bucket).download(key);
+      if (error) throw new Error(error.message);
+      const buf = Buffer.from(await data.arrayBuffer());
+      return Readable.from(buf.subarray(offset, offset + length));
+    },
+    async removeObject(bucket: string, key: string) {
+      const { error } = await sb.storage.from(bucket).remove([key]);
+      if (error) throw new Error(error.message);
+      return {};
+    },
+    listObjectsV2(bucket: string, prefix?: string, recursive?: boolean): AsyncIterable<any> {
+      return (async function* () {
+        const { data, error } = await sb.storage.from(bucket).list(prefix || "", { limit: 10000 });
+        if (error) throw new Error(error.message);
+        for (const f of (data || [])) {
+          if (f.metadata) {
+            yield { name: (prefix ? prefix + "/" : "") + f.name, size: f.metadata.size || 0, lastModified: new Date(f.metadata.lastModified || Date.now()) };
+          }
+        }
+      })();
+    },
+    async bucketExists(_bucket: string) { return true; },
+    async makeBucket(_bucket: string, _region?: string) { return {}; },
+    async listBuckets(): Promise<any[]> {
+      const { data, error } = await sb.storage.listBuckets();
+      if (error) throw new Error(error.message);
+      return ((data || []) as any[]).map((b: any) => ({ name: b.name }));
+    }
+  };
 }
 
 export function getActiveMinioConfig(): MinioConfig {
   return activeConfig;
 }
 
-export function withTimeout<T>(promise: Promise<T>, ms: number = 4000, errorMsg: string = "Tempo limite de conexão excedido"): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms = 4000, errorMsg = "Tempo limite de conexão excedido"): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${errorMsg} (${ms}ms)`));
-    }, ms);
-
-    promise
-      .then((res) => {
-        clearTimeout(timer);
-        resolve(res);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+    const timer = setTimeout(() => reject(new Error(`${errorMsg} (${ms}ms)`)), ms);
+    promise.then((res) => { clearTimeout(timer); resolve(res); }).catch((err) => { clearTimeout(timer); reject(err); });
   });
 }
 
 export async function ensureMinioBucketExists(bucketName: string): Promise<{ ready: boolean; error?: string }> {
   try {
-    const client = getActiveMinioClient();
-    const exists = await withTimeout(client.bucketExists(bucketName), 3000, "Timeout ao verificar bucket no MinIO");
-    if (!exists) {
-      await withTimeout(client.makeBucket(bucketName, activeConfig.region || "us-east-1"), 3000, "Timeout ao criar bucket no MinIO");
+    const { data, error } = await storage().storage.listBuckets();
+    if (error) return { ready: false, error: error.message };
+    const names = ((data || []) as any[]).map((b: any) => b.name);
+    if (!names.includes(bucketName)) {
+      const { error: cErr } = await storage().storage.createBucket(bucketName, { public: false });
+      if (cErr) return { ready: false, error: cErr.message };
     }
     return { ready: true };
   } catch (err: any) {
-    const errCode = err?.code || "";
-    const errMsg = err?.message || String(err);
-    console.warn(`[MinIO Service] Error checking/creating bucket '${bucketName}':`, errCode, errMsg);
-    
-    if (errCode === "SignatureDoesNotMatch" || errMsg.includes("signature")) {
-      return { ready: false, error: "Credenciais recusadas (Secret Key ou Access Key incorreta no MinIO)" };
-    }
-    return { ready: false, error: errMsg };
+    return { ready: false, error: err?.message || String(err) };
   }
 }
 
 export async function testMinioConnection(config?: MinioConfig): Promise<{ success: boolean; message: string; buckets?: string[]; detectedPort?: number }> {
   const cfg = config || activeConfig;
-  const { endPoint, port, useSSL } = parseMinioEndpoint(cfg.endpoint, cfg.port, cfg.useSSL);
-
-  const portsToTry = [port];
-  if (port !== 9000) {
-    portsToTry.push(9000); // Try 9000 as default S3 API fallback
-  }
-
-  let lastErrorMsg = "";
-
-  for (const currentPort of portsToTry) {
-    try {
-      const testClient = new Minio.Client({
-        endPoint,
-        port: currentPort,
-        useSSL,
-        accessKey: cfg.accessKey,
-        secretKey: cfg.secretKey,
-        region: cfg.region || "us-east-1"
-      });
-
-      const buckets = (await withTimeout(
-        testClient.listBuckets(),
-        2500,
-        `Timeout ao conectar à porta ${currentPort} do servidor MinIO`
-      )) as Minio.BucketItemFromList[];
-
-      const bucketNames = buckets.map((b) => b.name);
-      const bucketTarget = cfg.bucket || "armazenamento";
-
-      return {
-        success: true,
-        message: `Conexão efetuada com sucesso na porta ${currentPort}! ${buckets.length} bucket(s) localizados. Bucket '${bucketTarget}' pronto.`,
-        buckets: bucketNames,
-        detectedPort: currentPort
-      };
-    } catch (err: any) {
-      lastErrorMsg = err?.message || "Servidor inacessível ou credenciais incorretas.";
+  try {
+    const { data, error } = await storage().storage.listBuckets();
+    if (error) {
+      return { success: false, message: `Supabase Storage inacessível: ${error.message}` };
     }
+    const names = ((data || []) as any[]).map((b: any) => b.name);
+    return { success: true, message: `Storage conectado. Buckets: ${names.join(", ") || "(nenhum)"}`, buckets: names };
+  } catch (err: any) {
+    return { success: false, message: `Erro ao conectar ao Storage: ${err?.message || err}` };
   }
-
-  return {
-    success: true, // Return success true so config is saved gracefully while fallback mode stays active
-    message: `Configurações salvas! Nota: O servidor MinIO em ${endPoint}:${port} respondeu: "${lastErrorMsg}". O modo de resiliência continuará ativo para garantir que todos os uploads funcionem sem falhas.`
-  };
 }

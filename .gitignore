@@ -8,19 +8,14 @@ coverage
 # Dados e segredos locais
 data/
 db.json
-public_res.json
-public_response.json
 tail.txt
 *.zip
-metadata.json
 
 # Builds
 dist/
 dev-server.*
 dev-tools/
 
-# Uploads temporários (armazenamento local enquanto o MinIO está desligado).
-# A pasta uploads/ é versionada para o deploy via git push, mas estas partes não:
+# Anexos do suporte em fallback local (storage principal = Supabase Storage)
 uploads/suporte-anexos/
 uploads/cursos/
-uploads/Restaurar upload MinIo.md

@@ -56,7 +56,7 @@ export interface Curso {
   professorBio?: string;
   professorFoto?: string;
   createdAt?: string;
-  secao?: "cursos" | "series" | "treinamentos";
+  secao?: "cursos" | "treinamentos";
 }
 
 export interface Tecnologia {

@@ -33,8 +33,8 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (code.length < 6) {
-      setError("O código de acesso deve conter exatamente 6 dígitos.");
+    if (code.length < 4 || code.length > 6) {
+      setError("O código de acesso deve ter entre 4 e 6 dígitos.");
       return;
     }
 

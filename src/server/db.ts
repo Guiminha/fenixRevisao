@@ -64,16 +64,16 @@ export interface Curso {
   professorBio?: string;
   professorFoto?: string;
   createdAt?: string;
-  secao?: "cursos" | "series" | "treinamentos";
+  secao?: "cursos" | "treinamentos";
 }
 
 // Deriva a seção com prioridade ao campo `secao` (coluna nova) e, antes da
 // migração do SQL rodar, usa a `categoria` (que o form grava como
-// "Cursos"/"Séries"/"Treinamentos") — assim o site funciona sem o ALTER.
+// "Cursos"/"Treinamentos") — assim o site funciona sem o ALTER.
 function normalizeSecao(c: any): Curso["secao"] {
-  if (c.secao === "series" || c.secao === "treinamentos") return c.secao;
-  if (c.categoria === "Séries") return "series";
-  if (c.categoria === "Treinamentos") return "treinamentos";
+  if (c.secao === "series" || c.secao === "treinamentos") return "treinamentos";
+  if (c.categoria === "Séries" || c.categoria === "Série") return "treinamentos";
+  if (c.categoria === "Treinamentos" || c.categoria === "Treinamento") return "treinamentos";
   return "cursos";
 }
 
@@ -1676,15 +1676,40 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
   public async validateDICode(code: string): Promise<{ valid: boolean; role?: string; userCode?: string; name?: string; message?: string }> {
     const raw = code.trim();
     const formattedInput = raw.toUpperCase();
-    const formattedWithPrefix = formattedInput.startsWith("DI-") ? formattedInput : `DI-${formattedInput}`;
 
+    // ------------------------------------------------------------------
+    // 1. Fonte principal: tabela dis_fenix (cadastros vindos da API Nipponflex)
+    //    Valida o código e a SITUAÇÃO (somente situações permitidas logam).
+    // ------------------------------------------------------------------
+    try {
+      const client = getSupabaseTrustedClient();
+      if (client) {
+        const { data: di, error } = await client.from("dis_fenix").select("codigo, nome, situacao").eq("codigo", formattedInput).maybeSingle();
+        if (!error && di) {
+          // Situações permitidas (config; padrão: só Ativo "A")
+          const { data: cfg } = await client.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
+          const permitidas: string[] = Array.isArray(cfg?.value) ? cfg.value : ["A"];
+          const situacao = String(di.situacao || "I").toUpperCase();
+
+          if (!permitidas.includes(situacao)) {
+            console.warn(`[D.I.] ${di.codigo} encontrado mas situação "${situacao}" não está nas permitidas.`);
+            return { valid: false, message: "Cadastro encontrado, porém a situação atual não permite acesso no momento." };
+          }
+          return { valid: true, role: "user", userCode: di.codigo, name: di.nome || di.codigo };
+        }
+      }
+    } catch (e) {
+      console.warn("[D.I.] Falha ao consultar dis_fenix:", e);
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Fallback legado: config.diCodes (códigos manuais/fictícios p/ teste)
+    // ------------------------------------------------------------------
+    const formattedWithPrefix = formattedInput.startsWith("DI-") ? formattedInput : `DI-${formattedInput}`;
     const registeredList = await this.getDICodes();
-    
-    // Find matching active D.I. code in database
-    const found = registeredList.find(d => 
+    const found = registeredList.find(d =>
       (d.codigo.toUpperCase() === formattedInput || d.codigo.toUpperCase() === formattedWithPrefix || d.codigo.replace("DI-", "") === formattedInput)
     );
-
     if (found) {
       if (!found.ativo) {
         console.warn(`[D.I.] Código ${found.codigo} existe mas está desativado (resposta uniforme por anti-enumeração).`);

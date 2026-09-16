@@ -17,6 +17,15 @@ import {
   ensureMinioBucketExists,
   withTimeout 
 } from "./src/server/minioService.js";
+import {
+  executarSincronizacao,
+  getNfEstado,
+  getNfLogs,
+  obterMetricasDis,
+  obterDisPaginado,
+  carregarEstadoInicial,
+  verificarAgendador
+} from "./src/server/nipponflexService.js";
 import { 
   fetchMyVimeoVideos, 
   getVimeoAccountDetails, 
@@ -277,21 +286,36 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Serve Local Fallback Uploads
-app.get("/api/uploads/*", (req, res) => {
+// Serve Uploads (Supabase Storage primeiro; disco local como fallback dev)
+app.get("/api/uploads/*", async (req, res) => {
   try {
     const filePath = req.params[0];
-    if (!filePath || filePath.includes("..") || path.isAbsolute(filePath)) {
+    if (!filePath || filePath.includes("..") || filePath.includes("\\") || path.isAbsolute(filePath)) {
       return res.status(403).send("Caminho inválido.");
     }
-    const fullPath = path.join(uploadsDir, filePath);
-    if (!fullPath.startsWith(uploadsDir)) {
-      return res.status(403).send("Caminho inválido.");
-    }
-    if (fs.existsSync(fullPath)) {
-      const fileName = path.basename(fullPath);
+
+    // 1. Tenta servir do Supabase Storage (bucket "armazenamento")
+    try {
+      const bucket = "armazenamento";
+      const stream = await getActiveMinioClient().getObject(bucket, filePath);
+      const ext = fileExtOf(filePath);
+      const mime = EXT_TO_MIME[ext] || "application/octet-stream";
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return stream.pipe(res);
+    } catch (storageErr: any) {
+      // segue para o fallback em disco
+    }
+
+    // 2. Fallback: disco local (uploads/)
+    const fullPath = path.join(uploadsDir, filePath);
+    if (fullPath.startsWith(uploadsDir) && fs.existsSync(fullPath)) {
+      const fileName = path.basename(fullPath);
+      const ext = fileExtOf(filePath);
+      const mime = EXT_TO_MIME[ext] || "application/octet-stream";
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Type", mime);
       res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/[\r\n"]/g, "_")}"`);
       return res.sendFile(fullPath);
     }
@@ -1070,12 +1094,8 @@ app.post("/api/auth/login", loginRateLimiter, async (req, res) => {
   let userCode = code || "";
   let supabaseToken: string | undefined = undefined;
 
-  if (email && password) {
-    if (process.env.ADMIN_EMAIL && (process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD_HASH) &&
-        email === process.env.ADMIN_EMAIL && verifyAdminPassword(password)) {
-      role = "admin";
-      userCode = "admin";
-    } else if (supabase) {
+if (email && password) {
+    if (supabase) {
       try {
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
           email,
@@ -1088,8 +1108,6 @@ app.post("/api/auth/login", loginRateLimiter, async (req, res) => {
           // Segurança: role de administrador vem SOMENTE de app_metadata (controlada pelo servidor).
           // user_metadata é editável pelo próprio usuário e NUNCA é aceita como papel admin.
           const hasAppAdmin = authData.user.app_metadata?.role === "admin";
-          console.log(`[Supabase Auth] Verificação de role para ${maskEmail(email)}: app_metadata.role="admin"? ${hasAppAdmin}`);
-
           const isUserAdmin = hasAppAdmin;
           if (isUserAdmin) {
             role = "admin";
@@ -1578,7 +1596,7 @@ app.delete("/api/admin/novidades/:id", requireAdmin, async (req: any, res) => {
 // 6. Cursos CRUD
 app.post("/api/admin/cursos", requireAdmin, async (req: any, res) => {
   try {
-    const { id, titulo, descricao, categoria, nivel, imagem, duracao, modulos, professorNome, professorEspecialidade, professorBio, professorFoto, secao } = req.body;
+    const { id, titulo, descricao, categoria, nivel, imagem, duracao, modulos, professorNome, professorEspecialidade, professorBio, professorFoto, secao, createdAt } = req.body;
     if (!titulo || !descricao || !categoria || !imagem) {
       return res.status(400).json({ error: "Campos obrigatórios ausentes." });
     }
@@ -1631,8 +1649,8 @@ app.post("/api/admin/cursos", requireAdmin, async (req: any, res) => {
       professorEspecialidade: cleanText(professorEspecialidade),
       professorBio: cleanText(professorBio),
       professorFoto: safeLinkTarget(professorFoto),
-      createdAt: new Date().toISOString(),
-      secao: (secao === "series" || secao === "treinamentos" ? secao : "cursos") as Curso["secao"]
+createdAt: createdAt || new Date().toISOString(),
+      secao: (secao === "series" || secao === "treinamentos" ? "treinamentos" : "cursos") as Curso["secao"]
     };
 
     await dbService.saveCurso(item, req.user.role, req.user?.supabaseToken);
@@ -4066,9 +4084,81 @@ app.post("/api/admin/support-users/:email/reset-password", passwordChangeRateLim
     if (!flag.success) return res.status(400).json({ error: flag.error });
 
     res.json({ success: true, message: "Senha redefinida. O responsável definirá a própria senha no próximo acesso." });
-  } catch (err: any) {
+} catch (err: any) {
     console.error("[reset-password] erro:", err);
     res.status(500).json({ error: "Erro ao redefinir a senha." });
+  }
+});
+
+// ====================================================================
+// NIPPONFLEX — D.I.s (fonte de dados: API Nipponflex)
+// ====================================================================
+
+// Status do sistema de sincronização (para o card "Estado do Sistema" no admin)
+app.get("/api/admin/nipponflex/status", requireAdmin, async (req: any, res) => {
+  try {
+    const estado = getNfEstado();
+    const logs = getNfLogs();
+    const metricas = await obterMetricasDis();
+    res.json({ success: true, estado, logs, metricas });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao obter status do Nipponflex." });
+  }
+});
+
+// Sincronização manual (botão de emergência "SINCRONIZAR DADOS").
+// Roda em background (fire-and-forget) — a resposta volta na hora e o
+// card acompanha o andamento pelo status/logs.
+app.post("/api/admin/nipponflex/sync", requireAdmin, async (req: any, res) => {
+  try {
+    if (getNfEstado().status === "em_andamento") {
+      return res.json({ success: false, erro: "Sincronização já em andamento." });
+    }
+    // Dispara em background, sem bloquear a resposta HTTP.
+    executarSincronizacao().catch((e) => console.error("[Nipponflex] erro no sync manual:", e));
+    res.json({ success: true, iniciado: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao disparar sincronização." });
+  }
+});
+
+// Lista paginada de D.I.s (nome, código, situação)
+app.get("/api/admin/nipponflex/dados", requireAdmin, async (req: any, res) => {
+  try {
+    const pagina = Math.max(1, parseInt(String(req.query.pagina || "1"), 10) || 1);
+    const busca = String(req.query.busca || "").trim();
+    const situacao = String(req.query.situacao || "todos").trim();
+    const result = await obterDisPaginado(pagina, busca, situacao);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao listar D.I.s." });
+  }
+});
+
+// Situações que podem logar no site (ex.: ["A"] inicialmente)
+app.get("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req: any, res) => {
+  try {
+    const client = getSupabaseTrustedClient();
+    const { data } = await client!.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
+    res.json({ success: true, situacoes: Array.isArray(data?.value) ? data.value : ["A"] });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao obter situações permitidas." });
+  }
+});
+
+app.post("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req: any, res) => {
+  try {
+    const { situacoes } = req.body;
+    if (!Array.isArray(situacoes)) {
+      return res.status(400).json({ error: "Envie uma lista de situações." });
+    }
+    const permitidas = situacoes.map((s) => String(s).toUpperCase()).filter((s) => ["A", "I", "P", "S", "D"].includes(s));
+    const client = getSupabaseTrustedClient();
+    await client!.from("config").upsert({ key: "disSituacoesPermitidas", value: permitidas });
+    await dbService.recordAuditLog(req.user?.code || "Admin", "ATUALIZAR_SITUACOES_DI", `Situações permitidas para login D.I.: ${permitidas.join(", ") || "(nenhuma)"}`, req.user?.supabaseToken);
+    res.json({ success: true, situacoes: permitidas });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao salvar situações permitidas." });
   }
 });
 
@@ -4976,9 +5066,18 @@ async function start() {
   // "::" = dual-stack (IPv6 + IPv4): sem isso, "localhost" (que resolve para
   // ::1 no Windows) faz o navegador tentar IPv6 primeiro e esperar ~19s de
   // retransmissões de SYN antes de cair para IPv4 (view parecia travada).
-  const server = app.listen(PORT, "::", () => {
+const server = app.listen(PORT, "::", () => {
     console.log(`Server successfully started on http://0.0.0.0:${PORT}`);
   });
+
+  // Agendador diário da API Nipponflex: roda às 02:30 (horário de Brasília).
+  // Carrega o último estado (sobrevive a restart) e checa a cada 60s.
+  carregarEstadoInicial().then(() => {
+    verificarAgendador(); // se por acaso já for a hora logo após subir
+  });
+  setInterval(() => {
+    verificarAgendador().catch((e) => console.error("[Nipponflex] erro no agendador:", e));
+  }, 60_000);
 
   // Request timeout unlimited (large uploads), but keep-alive com teto contra
   // DoS de conexões paradas. ATENÆÂO: keepAliveTimeout baixo (5s) faz o Node

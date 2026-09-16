@@ -17,7 +17,18 @@ function looksLikeValidJwt(token: string): boolean {
   }
 }
 
-let isServerAvailable = true;
+let servidorIndisponivelAte = 0;
+
+// Cooldown de indisponibilidade: uma falha transitória marca o servidor como
+// indisponível por apenas 15s — depois o app volta a tentar automaticamente,
+// sem precisar recarregar a página (a flag antiga "grudava" em false e o
+// login nem tentava a chamada).
+function servidorDisponivel(): boolean {
+  return Date.now() >= servidorIndisponivelAte;
+}
+function marcarServidorIndisponivel(): void {
+  servidorIndisponivelAte = Date.now() + 15_000;
+}
 
 // Deduplica chamadas concorrentes de fetchPublicData (cada view monta e chama
 // fetchPublicData; aqui um único fetch é compartilhado, evitando N requests).
@@ -118,6 +129,14 @@ interface PlatformState {
   saveSupportUser: (data: { email: string; nome: string; senha?: string; ativo: boolean }) => Promise<{ success: boolean; error?: string; message?: string }>;
   resetSupportPassword: (email: string, novaSenha: string) => Promise<{ success: boolean; error?: string; message?: string }>;
   changeSupportPassword: (novaSenha: string) => Promise<{ success: boolean; error?: string; message?: string }>;
+
+  // Nipponflex (D.I.s via API)
+  nfStatus: any;
+  fetchNfStatus: () => Promise<{ success: boolean; estado?: any; logs?: any[]; metricas?: any; error?: string }>;
+  dispararNfSync: () => Promise<{ success: boolean; erro?: string }>;
+  fetchDisFenixPage: (opts: { pagina: number; busca: string; situacao: string }) => Promise<{ success: boolean; itens?: any[]; total?: number; pagina?: number; totalPaginas?: number; error?: string }>;
+  fetchSituacoesPermitidas: () => Promise<{ success: boolean; situacoes?: string[]; error?: string }>;
+  saveSituacoesPermitidas: (situacoes: string[]) => Promise<{ success: boolean; situacoes?: string[]; error?: string }>;
 
   // Material Actions
   recordDownload: (id: string) => Promise<void>;
@@ -257,6 +276,7 @@ export const useStore = create<PlatformState>((set, get) => {
     supportCounts: null,
     supportLeads: [],
     supportUsers: [],
+    nfStatus: null,
 
     // Fenix Social Data
     fenixPosts: [],
@@ -280,7 +300,7 @@ export const useStore = create<PlatformState>((set, get) => {
     fetchUser: async () => {
       set({ authLoading: true });
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -300,10 +320,10 @@ export const useStore = create<PlatformState>((set, get) => {
                 return false;
               }
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -327,38 +347,39 @@ export const useStore = create<PlatformState>((set, get) => {
 
     login: async (credentials) => {
       try {
-        if (isServerAvailable) {
-          try {
-            const res = await fetch("/api/auth/login", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(credentials)
-            });
-            const contentType = res.headers.get("content-type") || "";
-            if (res.ok && contentType.includes("application/json")) {
-              const data = await res.json();
-              if (data.success) {
-                localStorage.setItem("fenix_user", JSON.stringify(data.user));
-                localStorage.setItem("fenix_token", data.token);
-                set({ user: data.user, loggedIn: true, token: data.token });
-                get().fetchRestrictedData();
-                return { success: true };
-              } else {
-                return { success: false, error: data.error || "Erro de login desconhecido." };
-              }
-            } else if (contentType.includes("application/json")) {
-              const data = await res.json();
-              return { success: false, error: data.error || "Erro de login desconhecido." };
+        // Login é ação crítica: SEMPRE tenta a chamada, mesmo durante o
+        // cooldown de indisponibilidade (uma falha transitória nunca deve
+        // impedir a próxima tentativa de login).
+        try {
+          const res = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(credentials)
+          });
+          const contentType = res.headers.get("content-type") || "";
+          if (res.ok && contentType.includes("application/json")) {
+            const data = await res.json();
+            if (data.success) {
+              localStorage.setItem("fenix_user", JSON.stringify(data.user));
+              localStorage.setItem("fenix_token", data.token);
+              set({ user: data.user, loggedIn: true, token: data.token });
+              get().fetchRestrictedData();
+              return { success: true };
             } else {
-              isServerAvailable = false;
+              return { success: false, error: data.error || "Erro de login desconhecido." };
             }
-          } catch (e) {
-            isServerAvailable = false;
+          } else if (contentType.includes("application/json")) {
+            const data = await res.json();
+            return { success: false, error: data.error || "Erro de login desconhecido." };
+          } else {
+            marcarServidorIndisponivel();
           }
+        } catch (e) {
+          marcarServidorIndisponivel();
         }
 
         // Autenticação 100% via servidor: sem fallback direto ao Supabase no browser.
-        return { success: false, error: "Código D. I. não encontrado. Verifique o seu código." };
+        return { success: false, error: "Não foi possível conectar ao servidor. Tente novamente." };
       } catch (e) {
         // Erro genérico: nunca expor detalhes internos (stack/mensagens do engine).
         console.error("Login error", e);
@@ -367,7 +388,7 @@ export const useStore = create<PlatformState>((set, get) => {
     },
 
     logout: async () => {
-      if (isServerAvailable) {
+      if (servidorDisponivel()) {
         try {
           const headers: HeadersInit = {};
           const token = get().token;
@@ -400,9 +421,9 @@ export const useStore = create<PlatformState>((set, get) => {
     fetchPublicData: async () => {
       if (publicDataInflight) return publicDataInflight;
       publicDataInflight = (async () => {
-      isServerAvailable = true;
+      servidorIndisponivelAte = 0;
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const res = await fetch("/api/content/public");
             const contentType = res.headers.get("content-type") || "";
@@ -420,11 +441,11 @@ export const useStore = create<PlatformState>((set, get) => {
               return;
             } else {
               console.warn("Express backend not available (returned non-JSON/HTML). Servidor indisponível — dados padrão.");
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (fetchErr) {
             console.warn("Express backend connection failed. Servidor indisponível — dados padrão.");
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -510,9 +531,9 @@ export const useStore = create<PlatformState>((set, get) => {
 
     fetchRestrictedData: async () => {
       if (!get().loggedIn) return;
-      isServerAvailable = true;
+      servidorIndisponivelAte = 0;
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -538,10 +559,10 @@ export const useStore = create<PlatformState>((set, get) => {
               }
               return;
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -564,7 +585,7 @@ export const useStore = create<PlatformState>((set, get) => {
       if (!get().loggedIn || get().user?.role !== "admin") return;
       get().fetchAdminDiCodes();
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -576,10 +597,10 @@ export const useStore = create<PlatformState>((set, get) => {
               set({ adminStats: data.stats, adminDiList: data.diList || [], adminLogs: data.auditLogs || [] });
               return;
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -987,10 +1008,83 @@ export const useStore = create<PlatformState>((set, get) => {
       }
     },
 
-    // Downloads
+    // ---- Nipponflex (D.I.s via API) ----
+    fetchNfStatus: async () => {
+      try {
+        const headers: HeadersInit = {};
+        const token = get().token;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch("/api/admin/nipponflex/status", { headers });
+        const result = await res.json();
+        if (res.ok && result.success) {
+          set({ nfStatus: { estado: result.estado, logs: result.logs || [], metricas: result.metricas } });
+          return { success: true, estado: result.estado, logs: result.logs || [], metricas: result.metricas };
+        }
+        return { success: false, error: result.error || "Erro ao obter status." };
+      } catch (e: any) {
+        return { success: false, error: e.message || "Erro de conexão." };
+      }
+    },
+    dispararNfSync: async () => {
+      try {
+        const headers: HeadersInit = { "Content-Type": "application/json" };
+        const token = get().token;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch("/api/admin/nipponflex/sync", { method: "POST", headers });
+        const result = await res.json();
+        if (res.ok) {
+          return { success: !!result.success, erro: result.erro };
+        }
+        return { success: false, erro: result.error || "Erro ao sincronizar." };
+      } catch (e: any) {
+        return { success: false, erro: e.message || "Erro de conexão." };
+      }
+    },
+    fetchDisFenixPage: async ({ pagina, busca, situacao }) => {
+      try {
+        const headers: HeadersInit = {};
+        const token = get().token;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const q = new URLSearchParams({ pagina: String(pagina), busca, situacao }).toString();
+        const res = await fetch(`/api/admin/nipponflex/dados?${q}`, { headers });
+        const result = await res.json();
+        if (res.ok && result.success) {
+          return { success: true, itens: result.itens, total: result.total, pagina: result.pagina, totalPaginas: result.totalPaginas };
+        }
+        return { success: false, error: result.error || "Erro ao listar D.I.s." };
+      } catch (e: any) {
+        return { success: false, error: e.message || "Erro de conexão." };
+      }
+    },
+    fetchSituacoesPermitidas: async () => {
+      try {
+        const headers: HeadersInit = {};
+        const token = get().token;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch("/api/admin/nipponflex/situacoes-permitidas", { headers });
+        const result = await res.json();
+        if (res.ok && result.success) return { success: true, situacoes: result.situacoes };
+        return { success: false, error: result.error || "Erro ao obter situações." };
+      } catch (e: any) {
+        return { success: false, error: e.message || "Erro de conexão." };
+      }
+    },
+    saveSituacoesPermitidas: async (situacoes) => {
+      try {
+        const headers: HeadersInit = { "Content-Type": "application/json" };
+        const token = get().token;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+        const res = await fetch("/api/admin/nipponflex/situacoes-permitidas", { method: "POST", headers, body: JSON.stringify({ situacoes }) });
+        const result = await res.json();
+        if (res.ok && result.success) return { success: true, situacoes: result.situacoes };
+        return { success: false, error: result.error || "Erro ao salvar situações." };
+      } catch (e: any) {
+        return { success: false, error: e.message || "Erro de conexão." };
+      }
+    },
     recordDownload: async (id) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1028,10 +1122,10 @@ export const useStore = create<PlatformState>((set, get) => {
               }
               return;
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1044,7 +1138,7 @@ export const useStore = create<PlatformState>((set, get) => {
     // Admin mutations
     saveBanner: async (banner) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1080,7 +1174,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     deleteBanner: async (id) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1104,7 +1198,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     saveNovidade: async (novidade) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1120,10 +1214,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return { success: true };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1136,7 +1230,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     deleteNovidade: async (id) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1170,7 +1264,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     saveCurso: async (curso) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1204,7 +1298,7 @@ export const useStore = create<PlatformState>((set, get) => {
             }
           } catch (e: any) {
             console.warn("Server API fetch error in saveCurso:", e);
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1217,7 +1311,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     deleteCurso: async (id) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1257,7 +1351,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     saveMaterial: async (material) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1274,10 +1368,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return { success: true };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1290,7 +1384,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     deleteMaterial: async (id) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1330,7 +1424,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     updateLeaderBio: async (bio) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1346,10 +1440,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return { success: true };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1362,7 +1456,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     saveCategoriasMateriais: async (categorias) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1379,10 +1473,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return { success: true };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1395,7 +1489,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     uploadLogo: async (logoBase64) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1413,10 +1507,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return { success: true, logoUrl: data.logoUrl };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1429,7 +1523,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     uploadFile: async (fileBase64, fileName, folder) => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token;
@@ -1444,10 +1538,10 @@ export const useStore = create<PlatformState>((set, get) => {
               const data = await res.json();
               return { success: true, url: data.url };
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
         return { success: true, url: fileBase64 };
@@ -1458,7 +1552,7 @@ export const useStore = create<PlatformState>((set, get) => {
 
     resetLogo: async () => {
       try {
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = {};
             const token = get().token;
@@ -1473,10 +1567,10 @@ export const useStore = create<PlatformState>((set, get) => {
               await get().fetchAdminData();
               return true;
             } else {
-              isServerAvailable = false;
+              marcarServidorIndisponivel();
             }
           } catch (e) {
-            isServerAvailable = false;
+            marcarServidorIndisponivel();
           }
         }
 
@@ -1817,7 +1911,7 @@ export const useStore = create<PlatformState>((set, get) => {
           localStorage.setItem("fenix_hidden_home_cards", JSON.stringify(next));
         } catch (e) {}
 
-        if (isServerAvailable) {
+        if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
             const token = get().token || localStorage.getItem("fenix_token");
@@ -1842,7 +1936,7 @@ export const useStore = create<PlatformState>((set, get) => {
         localStorage.setItem("fenix_hidden_home_cards", JSON.stringify(next));
       } catch (e) {}
 
-      if (isServerAvailable) {
+      if (servidorDisponivel()) {
         try {
           const headers: HeadersInit = { "Content-Type": "application/json" };
           const token = get().token || localStorage.getItem("fenix_token");

@@ -99,7 +99,7 @@ export default function Sidebar() {
     { id: "cadastrar-di", label: "Cadastrar D.I.", icon: KeyRound },
     { id: "banners", label: "Banners Início", icon: Layers },
     { id: "cards-home", label: "Cards Tela Inicial", icon: Eye },
-    { id: "cursos", label: "Cursos & Aulas", icon: GraduationCap },
+    { id: "cursos", label: "Cursos e Treinamentos", icon: GraduationCap },
     { id: "materiais", label: "Materiais", icon: FolderDown },
     { id: "fenix-social", label: "Fênix Social", icon: Flame },
     { id: "suporte", label: "Suporte", icon: LifeBuoy },

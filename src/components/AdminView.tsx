@@ -28,6 +28,7 @@ import {
   Lock,
   Calendar,
   CheckCircle2,
+  XCircle,
   Trash2,
   ListPlus,
   PlayCircle,
@@ -131,7 +132,13 @@ export default function AdminView() {
     setActiveCourse,
     setSubView,
     adminActiveTab,
-    setAdminActiveTab
+    setAdminActiveTab,
+    fetchNfStatus,
+    dispararNfSync,
+    fetchDisFenixPage,
+    fetchSituacoesPermitidas,
+    saveSituacoesPermitidas,
+    nfStatus
   } = useStore();
 
   const activeTab = adminActiveTab;
@@ -139,6 +146,152 @@ export default function AdminView() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [searchDI, setSearchDI] = useState("");
+
+  // ---- Nipponflex (D.I.s via API) state & handlers ----
+  const [nfEstado, setNfEstado] = useState<any>(null);
+  const [nfMetricas, setNfMetricas] = useState<any>(null);
+  const [nfSituacoes, setNfSituacoes] = useState<string[]>(["A"]);
+  const [nfItens, setNfItens] = useState<any[]>([]);
+  const [nfTotal, setNfTotal] = useState(0);
+  const [nfTotalPaginas, setNfTotalPaginas] = useState(0);
+  const [nfPagina, setNfPagina] = useState(1);
+  const [nfBusca, setNfBusca] = useState("");
+  const [nfFiltroSit, setNfFiltroSit] = useState("todos");
+  const [nfCarregando, setNfCarregando] = useState(false);
+  const [nfSyncing, setNfSyncing] = useState(false);
+  const [nfCarregandoStatus, setNfCarregandoStatus] = useState(false);
+  const [nfLogs, setNfLogs] = useState<any[]>([]);
+
+  const NfSitBadge = ({ situacao }: { situacao: string }) => {
+    const mapa: Record<string, { l: string; c: string }> = {
+      A: { l: "Ativo", c: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25" },
+      I: { l: "Inativo", c: "text-slate-300 bg-white/5 border-white/10" },
+      P: { l: "Pendente", c: "text-amber-400 bg-amber-500/10 border-amber-500/25" },
+      S: { l: "Suspenso", c: "text-orange-400 bg-orange-500/10 border-orange-500/25" },
+      D: { l: "Descredenciado", c: "text-red-400 bg-red-500/10 border-red-500/25" }
+    };
+    const info = mapa[situacao] || mapa.I;
+    return <span className={`inline-block px-2.5 py-1 rounded-full border text-[10px] font-bold ${info.c}`}>{info.l} ({situacao})</span>;
+  };
+
+  const nfStatusBadge = nfEstado?.status === "ok" && nfEstado?.ultimaSincronizacao
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold uppercase tracking-wider"><CheckCircle2 className="w-3.5 h-3.5" /> Ok</span>
+    : nfEstado?.status === "ok"
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/15 text-[#94a3b8] text-[10px] font-bold uppercase tracking-wider"><Database className="w-3.5 h-3.5" /> Sem dados</span>
+    : nfEstado?.status === "em_andamento"
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Em andamento</span>
+    : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold uppercase tracking-wider"><XCircle className="w-3.5 h-3.5" /> Erro</span>;
+
+  const nfUltimaAtualizacao = nfEstado?.ultimaSincronizacao
+    ? new Date(nfEstado.ultimaSincronizacao).toLocaleString("pt-BR")
+    : nfEstado?.status === "em_andamento"
+    ? "Sincronizando..."
+    : "Nunca sincronizado";
+
+  const nfUltimoRelatorioResumo = nfEstado?.ultimoRelatorio
+    ? `Arquivo: ${nfEstado.ultimoRelatorio}\nBaixados: ${(nfEstado.baixados || 0).toLocaleString("pt-BR")} bytes\nFiltrados: ${(nfEstado.filtrados || 0).toLocaleString("pt-BR")} D.I.s\nNovos cadastrados: ${(nfEstado.novosCadastrados || 0).toLocaleString("pt-BR")}`
+    : null;
+
+  const carregarNfStatus = async () => {
+    if (nfCarregandoStatus) return;
+    setNfCarregandoStatus(true);
+    const res = await fetchNfStatus();
+    if (res.success) {
+      setNfEstado(res.estado);
+      setNfMetricas(res.metricas);
+      setNfLogs(res.logs || []);
+    }
+    setNfCarregandoStatus(false);
+  };
+
+  const carregarNfDados = async () => {
+    setNfCarregando(true);
+    const res = await fetchDisFenixPage({ pagina: nfPagina, busca: nfBusca, situacao: nfFiltroSit });
+    if (res.success) {
+      setNfItens(res.itens || []);
+      setNfTotal(res.total || 0);
+      setNfTotalPaginas(res.totalPaginas || 0);
+    }
+    setNfCarregando(false);
+  };
+
+  const handleNfSync = async () => {
+    if (!window.confirm("Iniciar a sincronização com a API Nipponflex agora? Isso pode levar alguns minutos.")) return;
+    setNfSyncing(true);
+    const res = await dispararNfSync();
+    setNfSyncing(false);
+    if (res.success) {
+      triggerNotification("success", "Sincronização iniciada. Acompanhe o status do sistema.");
+    } else {
+      triggerNotification("error", res.erro || "Não foi possível iniciar a sincronização.");
+    }
+    // Carrega o status para refletir "em andamento"
+    await carregarNfStatus();
+  };
+
+  const toggleNfSituacao = (v: string) => {
+    setNfSituacoes((prev) => prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]);
+  };
+
+  const handleSalvarSituacoes = async () => {
+    const res = await saveSituacoesPermitidas(nfSituacoes);
+    if (res.success) {
+      triggerNotification("success", "Configuração de acesso salva.");
+    } else {
+      triggerNotification("error", res.error || "Erro ao salvar.");
+    }
+  };
+
+  const baixarLogMd = () => {
+    const data = new Date().toLocaleString("pt-BR");
+    const linhas = nfLogs.length
+      ? nfLogs.map((l) => `- \`${l.ts}\` **${l.nivel}**: ${l.msg}`).join("\n")
+      : "Nenhum log registrado.";
+    const conteudo = `# Log da Sincronização Nipponflex\n\n- **Data de exportação:** ${data}\n- **Status:** ${nfEstado?.status || "—"}\n- **Última atualização:** ${nfEstado?.ultimaSincronizacao ? new Date(nfEstado.ultimaSincronizacao).toLocaleString("pt-BR") : "—"}\n\n## Logs\n\n${linhas}\n`;
+    const blob = new Blob([conteudo], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const nome = `log-nipponflex-${new Date().toISOString().slice(0, 10)}.md`;
+    a.href = url;
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    if (activeTab === "cadastrar-di") {
+      carregarNfStatus();
+      fetchSituacoesPermitidas().then((r) => { if (r.success && r.situacoes) setNfSituacoes(r.situacoes); });
+    }
+  }, [activeTab]);
+
+  // Auto-atualização do status/logs enquanto houver sincronização em andamento
+  useEffect(() => {
+    if (activeTab !== "cadastrar-di") return;
+    if (nfEstado?.status !== "em_andamento") return;
+    const id = setInterval(async () => {
+      const res = await fetchNfStatus();
+      if (res.success) {
+        setNfEstado(res.estado);
+        setNfMetricas(res.metricas);
+        setNfLogs(res.logs || []);
+        // Quando termina, recarrega a lista de D.I.s
+        if (res.estado?.status !== "em_andamento") {
+          carregarNfDados();
+        }
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [activeTab, nfEstado?.status]);
+
+  useEffect(() => {
+    if (activeTab === "cadastrar-di") {
+      const t = setTimeout(() => carregarNfDados(), 300);
+      return () => clearTimeout(t);
+    }
+  }, [activeTab, nfPagina, nfBusca, nfFiltroSit]);
 
   const handleExportPdfReport = async () => {
     const listToExport = (adminDiList && adminDiList.length > 0) ? adminDiList : [
@@ -257,7 +410,7 @@ export default function AdminView() {
       typeColor: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
       imagem: c.imagem || "/uploads/grupo_fenix_lider_bio.jpg",
       titulo: c.titulo,
-      categoria: c.secao === "series" ? "Série" : c.secao === "treinamentos" ? "Treinamento" : "Curso"
+      categoria: c.secao === "series" || c.secao === "treinamentos" ? "Treinamento" : "Curso"
     }));
 
     const mat = (restrictedData?.materiais || publicData?.materiais || []).map((m) => ({
@@ -470,10 +623,20 @@ export default function AdminView() {
     const updated = [...cursoModulos];
     const target = updated[0] || { id: `m-single-${Date.now()}`, titulo: "Módulo 1", aulas: [] };
     const aulas = [...(target.aulas || [])];
+
+    // Extrai "YYYY-MM-DD - Título" para título limpo + data da live (treinamentos)
+    const extrairDataTitulo = (name: string) => {
+      const m = (name || "").trim().match(/^(\d{4}-\d{2}-\d{2})\s*[-–—]\s*(.*)$/);
+      if (m) return { data: m[1], titulo: m[2].trim() };
+      return { data: "", titulo: (name || "").trim() };
+    };
+
     for (const video of selected) {
+      const { data, titulo } = extrairDataTitulo(video.title || "");
+      const aulaTitulo = titulo || video.title || "Vídeo Vimeo";
       const aula = {
         id: `a-vimeo-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        titulo: video.title || "Vídeo Vimeo",
+        titulo: aulaTitulo,
         duracao: video.durationFormatted || "Auto",
         tipoVideo: "vimeo" as const,
         videoUrl: video.embedUrl || video.id || "",
@@ -482,6 +645,12 @@ export default function AdminView() {
         thumbnail: video.thumbnail || ""
       };
       aulas.push(aula);
+
+      // Para treinamento (vídeo único), preenche título e data automaticamente
+      if (cursoSecao === "treinamentos") {
+        if (data) setCursoDataLive(data);
+        if (aulaTitulo && !cursoTitulo) setCursoTitulo(aulaTitulo);
+      }
     }
     target.aulas = aulas;
     if (updated.length === 0) updated.push(target);
@@ -1506,7 +1675,8 @@ export default function AdminView() {
   const [cursoTitulo, setCursoTitulo] = useState("");
   const [cursoDesc, setCursoDesc] = useState("");
   const [cursoCategory, setCursoCategory] = useState("Cursos");
-  const [cursoSecao, setCursoSecao] = useState<"cursos" | "series" | "treinamentos">("cursos");
+  const [cursoSecao, setCursoSecao] = useState<"cursos" | "treinamentos">("cursos");
+  const [cursoDataLive, setCursoDataLive] = useState("");
   const [cursoVideoLink, setCursoVideoLink] = useState("");
   const [cursoImagem, setCursoImagem] = useState("");
   const [cursoDuracao, setCursoDuracao] = useState("8h (12 Aulas)");
@@ -1888,7 +2058,7 @@ export default function AdminView() {
       titulo: "Módulo 1",
       aulas: flattened
     }]);
-    setCursoSecao(item.secao || "cursos");
+    setCursoSecao(item.secao === "treinamentos" ? "treinamentos" : "cursos");
     setCursoVideoLink(flattened[0]?.videoUrl || "");
   };
 
@@ -1899,7 +2069,7 @@ export default function AdminView() {
       triggerNotification("error", "Preencha o Nome, a Descrição e a Capa do curso.");
       return;
     }
-    const secaoLabel = cursoSecao === "series" ? "Séries" : cursoSecao === "treinamentos" ? "Treinamentos" : "Cursos";
+    const secaoLabel = cursoSecao === "treinamentos" ? "Treinamentos" : "Cursos";
     const todasAulas = (cursoModulos?.[0]?.aulas || []).filter((a: any) => a?.videoUrl);
     if (todasAulas.length === 0) {
       triggerNotification("error", "Adicione pelo menos um vídeo Vimeo pelo botão \"Adicionar vídeos\".");
@@ -1921,11 +2091,11 @@ export default function AdminView() {
 
       const modulosFinal = [{
         id: cursoModulos?.[0]?.id || `m-${Date.now()}`,
-        titulo: cursoSecao === "series" ? "Episódio" : cursoSecao === "treinamentos" ? "Treinamento" : "Módulo 1",
+        titulo: cursoSecao === "treinamentos" ? "Treinamento" : "Módulo 1",
         aulas: aulasFinal
       }];
 
-      const unit = cursoSecao === "series" ? "Episódio" : cursoSecao === "treinamentos" ? "Treinamento" : "Aula";
+      const unit = cursoSecao === "treinamentos" ? "Treinamento" : "Aula";
       const duracaoFinal = `${aulasFinal.length} ${aulasFinal.length === 1 ? unit : `${unit}s`}`;
 
       const payload = {
@@ -1941,7 +2111,8 @@ export default function AdminView() {
         professorFoto: professorAtivo ? (professorFoto || "") : "",
         duracao: duracaoFinal,
         modulos: modulosFinal,
-        secao: cursoSecao
+        secao: cursoSecao,
+        createdAt: cursoDataLive ? `${cursoDataLive}T12:00:00.000Z` : undefined
       };
 
       const result = await saveCurso(payload);
@@ -1959,6 +2130,7 @@ export default function AdminView() {
         setProfessorAtivo(false);
         setCursoCategory("Cursos");
         setCursoSecao("cursos");
+        setCursoDataLive("");
         setCursoVideoLink("");
         setCursoModulos([{ id: `m-temp-${Date.now()}`, titulo: "Módulo 1", aulas: [] }]);
       } else {
@@ -2092,6 +2264,8 @@ export default function AdminView() {
       triggerNotification("error", result.error || "Erro ao salvar material.");
     }
   };
+
+  const adminCursosFiltrados = (restrictedData?.cursos || []).filter((c: any) => (c.secao === "treinamentos") === (cursoSecao === "treinamentos"));
 
   return (
     <div id="admin-dashboard-container" className="space-y-8 pb-16 animate-fade-in select-none relative">
@@ -2508,347 +2682,218 @@ export default function AdminView() {
         </div>
       )}
 
-      {/* TAB CONTENT: CADASTRAR & GERENCIAR D.I.s SIGILOSOS */}
+      {/* TAB CONTENT: D.I.s (via API Nipponflex) */}
       {activeTab === "cadastrar-di" && (
         <div className="space-y-8 animate-fadeIn">
           {/* Header Banner */}
           <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
-              <KeyRound className="w-48 h-48 text-[#d12a62]" />
+              <KeyRound className="w-44 h-44 text-[#d12a62]" />
             </div>
             <div className="relative z-10 space-y-3 max-w-3xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono font-bold">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                Segurança Nível de Banco de Dados — Sem Exposição no Frontend
+                Sincronização automática via API Nipponflex
               </div>
               <h2 className="text-xl md:text-2xl font-black text-white uppercase tracking-tight font-display flex items-center gap-3">
                 <KeyRound className="w-7 h-7 text-[#d12a62]" />
-                Cadastro & Gestão Sigilosa de Códigos D.I.
+                D.I.s do Grupo Fênix
               </h2>
               <p className="text-xs md:text-sm text-[#8a96a3] leading-relaxed">
-                Adicione e controle os códigos D.I. autorizados a acessar as áreas restritas da plataforma (Escola Fênix e Banco de Materiais). Em conformidade com os requisitos de confidencialidade, nenhum código D.I. fica visível no frontend e toda a validação de credenciais é realizada estritamente no Servidor (Backend).
+                Os D.I.s são cadastrados automaticamente a partir da API Nipponflex (diariamente às 02:30). Aqui você acompanha o estado da sincronização, as métricas e quem pode acessar a área restrita.
               </p>
             </div>
           </div>
 
-          {/* Form and Stats Grid */}
-          <div className="grid lg:grid-cols-12 gap-8 items-start">
-            {/* Cadastro Form Card */}
-            <div className="lg:col-span-5 bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-6">
-              <div className="border-b border-white/5 pb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-[#d12a62]/10 border border-[#d12a62]/20 flex items-center justify-center text-[#d12a62]">
-                    <Plus className="w-5 h-5" />
+          {/* CARD ESTADO DO SISTEMA (topo direito) + métricas */}
+          <div className="grid lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-7 space-y-6">
+              {/* Métricas por situação */}
+              <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-5 shadow-xl">
+                <h3 className="text-sm font-bold text-white font-display mb-4 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-[#d12a62]" />
+                  Quantidade de D.I.s no Grupo Fênix
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {[
+                    { chave: "A", label: "Ativos", cor: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
+                    { chave: "I", label: "Inativos", cor: "text-slate-300", bg: "bg-white/5 border-white/10" },
+                    { chave: "P", label: "Pendentes", cor: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20" },
+                    { chave: "S", label: "Suspensos", cor: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/20" },
+                    { chave: "D", label: "Descredenciados", cor: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
+                    ...(nfMetricas?.porSituacao?.outros ? [{ chave: "outros", label: "Outros", cor: "text-violet-400", bg: "bg-violet-500/10 border-violet-500/20" }] : []),
+                  ].map((s) => (
+                    <div key={s.chave} className={`rounded-2xl p-4 border ${s.bg}`}>
+                      <div className={`text-2xl font-black font-mono ${s.cor}`}>{(nfMetricas?.porSituacao?.[s.chave] || 0).toLocaleString("pt-BR")}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-1 font-bold">{s.label}</div>
+                    </div>
+                  ))}
+                  <div className="rounded-2xl p-4 border bg-[#d12a62]/10 border-[#d12a62]/20">
+                    <div className="text-2xl font-black font-mono text-[#ff719e]">{(nfMetricas?.total || 0).toLocaleString("pt-BR")}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-1 font-bold">Total</div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">
-                      Novo Código D.I.
-                    </h3>
-                    <p className="text-[11px] text-[#8a96a3]">
-                      Preencha os dados do novo código de acesso
-                    </p>
-                  </div>
-                </div>
-                <Lock className="w-4 h-4 text-emerald-400" />
-              </div>
-
-              <form onSubmit={handleCreateDiCode} className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-[#e8edf2] uppercase tracking-wider font-display flex items-center justify-between">
-                    <span>Código D.I. *</span>
-                    <span className="text-[10px] text-[#8a96a3] font-normal normal-case">Formatado automaticamente com DI-</span>
-                  </label>
-                  <div className="relative">
-                    <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#d12a62]" />
-                    <input
-                      type="text"
-                      value={newDiCode}
-                      onChange={(e) => setNewDiCode(e.target.value)}
-                      placeholder="Ex: 884210 ou DI-REGIONAL-SP"
-                      className="w-full bg-[#0b0f14] border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-[#8a96a3]/50 focus:outline-none focus:border-[#d12a62] transition-colors font-mono font-bold"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-[#e8edf2] uppercase tracking-wider font-display">
-                    Identificação / Titular / Observações
-                  </label>
-                  <input
-                    type="text"
-                    value={newDiDesc}
-                    onChange={(e) => setNewDiDesc(e.target.value)}
-                    placeholder="Ex: Carlos Mendes — Líder Regional SP"
-                    className="w-full bg-[#0b0f14] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-[#8a96a3]/50 focus:outline-none focus:border-[#d12a62] transition-colors"
-                  />
-                </div>
-
-                <div className="p-4 rounded-2xl bg-[#0b0f14]/80 border border-white/[0.04] space-y-2 text-xs text-[#8a96a3]">
-                  <div className="flex items-center gap-2 font-bold text-emerald-400">
-                    <ShieldCheck className="w-4 h-4 shrink-0" />
-                    <span>Proteção Sigilosa de Dados</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed">
-                    Este código será armazenado no banco de dados e validado diretamente na rota da API `/api/login`. Ele não estará acessível por inspeção de código ou requisições do frontend.
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmittingDi || !newDiCode.trim()}
-                  className="w-full py-3.5 px-6 rounded-xl bg-gold-metallic text-black font-black uppercase text-xs tracking-wider shadow-lg shadow-[#d12a62]/20 hover:brightness-110 active:scale-[0.98] transition-all duration-300 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSubmittingDi ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Gravando no Banco com Segurança...
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-4 h-4" />
-                      Cadastrar Código D.I.
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
-
-            {/* List and Management Table */}
-            <div className="lg:col-span-7 bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/5 pb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display flex items-center gap-2">
-                    <Database className="w-4 h-4 text-[#d12a62]" />
-                    Códigos D.I. Registrados no Banco
-                  </h3>
-                  <p className="text-[11px] text-[#8a96a3] mt-0.5">
-                    {adminDiCodes.length} código(s) cadastrado(s) no total
-                  </p>
-                </div>
-
-                {/* Filter Search */}
-                <div className="relative min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#8a96a3]" />
-                  <input
-                    type="text"
-                    value={filterDiText}
-                    onChange={(e) => setFilterDiText(e.target.value)}
-                    placeholder="Filtrar por código ou nome..."
-                    className="w-full bg-[#0b0f14] border border-white/10 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-[#8a96a3]/50 focus:outline-none focus:border-[#d12a62] font-mono"
-                  />
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="bg-[#0b0f14] border border-white/5 rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto scrollbar-slim">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-white/5 text-[#8a96a3] font-mono text-[10px] uppercase font-bold tracking-wider border-b border-white/5">
-                      <tr>
-                        <th className="py-3 px-4">Código D.I.</th>
-                        <th className="py-3 px-4">Identificação / Titular</th>
-                        <th className="py-3 px-4 text-center">Status</th>
-                        <th className="py-3 px-4 text-right">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5 font-mono">
-                      {adminDiCodes.filter(di => 
-                        di.codigo.toLowerCase().includes(filterDiText.toLowerCase()) || 
-                        (di.descricao && di.descricao.toLowerCase().includes(filterDiText.toLowerCase()))
-                      ).length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-8 text-center text-[#8a96a3] text-xs">
-                            {adminDiCodes.length === 0 ? "Nenhum código D.I. cadastrado no momento." : "Nenhum código corresponde ao filtro da busca."}
-                          </td>
-                        </tr>
-                      ) : (
-                        adminDiCodes
-                          .filter(di => 
-                            di.codigo.toLowerCase().includes(filterDiText.toLowerCase()) || 
-                            (di.descricao && di.descricao.toLowerCase().includes(filterDiText.toLowerCase()))
-                          )
-                          .map((di) => (
-                            <tr key={di.id} className="hover:bg-white/[0.02] transition-colors">
-                              <td className="py-3 px-4 font-bold text-white">
-                                <span className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-white inline-flex items-center gap-1.5 text-xs font-mono">
-                                  <KeyRound className="w-3.5 h-3.5 text-[#d12a62]" />
-                                  {di.codigo}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4 text-[#e8edf2]">
-                                <div className="font-sans font-medium text-xs">{di.descricao || "Sem descrição"}</div>
-                                <div className="text-[10px] text-[#8a96a3] mt-0.5">
-                                  Cadastrado em: {new Date(di.createdAt).toLocaleDateString("pt-BR")}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 text-center">
-                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                                  di.ativo
-                                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                                    : "bg-red-500/10 text-red-400 border border-red-500/20"
-                                }`}>
-                                  {di.ativo ? "Ativo" : "Inativo"}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleToggleDiStatus(di.id, di.ativo, di.codigo)}
-                                    title={di.ativo ? "Desativar Código" : "Ativar Código"}
-                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-colors ${
-                                      di.ativo
-                                        ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20"
-                                        : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20"
-                                    }`}
-                                  >
-                                    {di.ativo ? "Desativar" : "Ativar"}
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteDi(di.id, di.codigo)}
-                                    title="Remover Código D.I."
-                                    className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-500/20 transition-colors"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))
-                      )}
-                    </tbody>
-                  </table>
                 </div>
               </div>
             </div>
-          </div>
 
-            {/* CADASTRO EM LOTE DE D.I.S (CSV) */}
-            <div className="lg:col-span-12 bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-5">
-              <div className="flex items-start gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-[#d12a62]/15 border border-[#d12a62]/30 flex items-center justify-center shrink-0">
-                  <FileSpreadsheet className="w-5 h-5 text-[#d12a62]" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">
-                    Cadastro em Lote de D.I.s
+            {/* Card Estado do Sistema */}
+            <div className="lg:col-span-5">
+              <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-5 shadow-xl h-full">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-[#d12a62]" />
+                    Estado do Sistema
                   </h3>
-                  <p className="text-[11px] text-[#8a96a3]">
-                    Baixe o modelo, preencha os dados e envie o arquivo .csv — o sistema cadastra todos os D.I.s de uma vez no banco de dados.
-                  </p>
+                  {nfStatusBadge}
                 </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-4">
-                <button
-                  type="button"
-                  onClick={handleDownloadDiTemplate}
-                  disabled={isDownloadingTemplate}
-                  className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#0b0f14] border border-white/10 text-xs font-bold text-[#e8edf2] hover:border-[#d12a62]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isDownloadingTemplate ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4 text-[#d12a62]" />
-                  )}
-                  Baixar Modelo (.csv)
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleExportDiCodesCsv}
-                  disabled={isExportingDiCodes || adminDiCodes.length === 0}
-                  title={adminDiCodes.length === 0 ? "Nenhum D.I. cadastrado para exportar" : "Baixar o CSV com todos os D.I.s cadastrados"}
-                  className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-[#0b0f14] border border-white/10 text-xs font-bold text-[#e8edf2] hover:border-[#d12a62]/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isExportingDiCodes ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <FileSpreadsheet className="w-4 h-4 text-[#d12a62]" />
-                  )}
-                  Baixar CSV dos D.I.s cadastrados
-                </button>
-
-                <label className="flex-1 flex items-center gap-3 px-4 py-3 rounded-xl bg-[#0b0f14] border border-dashed border-white/15 hover:border-[#d12a62]/50 transition-colors cursor-pointer min-w-0">
-                  <Upload className="w-4 h-4 text-[#8a96a3] shrink-0" />
-                  <span className="text-xs text-[#8a96a3] truncate">
-                    {bulkDiFile ? (
-                      <span className="text-white font-mono font-bold">{bulkDiFile.name}</span>
-                    ) : (
-                      "Apenas .csv — arraste ou clique para escolher o arquivo"
-                    )}
-                  </span>
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="hidden"
-                    onChange={(e) => setBulkDiFile(e.target.files?.[0] || null)}
-                  />
-                </label>
-
-                <button
-                  type="button"
-                  onClick={handleImportDiCsv}
-                  disabled={!bulkDiFile || isImportingDi}
-                  className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gold-metallic text-black font-black uppercase text-xs tracking-wider shadow-lg shadow-[#d12a62]/20 hover:brightness-110 active:scale-[0.98] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isImportingDi ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Importando...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="w-4 h-4" />
-                      Importar D.I.s
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <p className="text-[11px] text-[#8a96a3] leading-relaxed">
-                1ª coluna = <strong className="text-white">Nome do D.I.</strong> · 2ª coluna ={" "}
-                <strong className="text-white">Código do D.I.</strong> — linha por linha, todos os D.I. do arquivo são
-                cadastrados no banco de dados.
-              </p>
-
-              {bulkDiReport && (
-                <div className="rounded-2xl bg-[#0b0f14]/80 border border-white/10 p-4 space-y-3">
-                  <div className="flex flex-wrap gap-2 text-[11px] font-mono">
-                    <span className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[#8a96a3]">
-                      Linhas válidas: {bulkDiReport.total ?? 0}
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold">
-                      {bulkDiReport.imported ?? 0} importado(s)
-                    </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold">
-                      {bulkDiReport.duplicates ?? 0} duplicado(s)
-                    </span>
-                    {(bulkDiReport.errors?.length ?? 0) > 0 && (
-                      <span className="px-2.5 py-1 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 font-bold">
-                        {bulkDiReport.errors.length} erro(s)
-                      </span>
-                    )}
-                  </div>
-                  {(bulkDiReport.errors?.length ?? 0) > 0 && (
-                    <div className="max-h-36 overflow-y-auto space-y-1">
-                      {bulkDiReport.errors.map((e: any, i: number) => (
-                        <p key={i} className="text-[11px] font-mono text-red-400">
-                          Linha {e.line}: {e.motivo}
-                        </p>
-                      ))}
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Última atualização</span><strong className="text-white">{nfUltimaAtualizacao}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Arquivo bruto (API)</span><strong className="text-white font-mono truncate max-w-[60%]">{nfEstado?.ultimoArquivoBruto || "—"}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Arquivo filtrado</span><strong className="text-white font-mono truncate max-w-[60%]">{nfEstado?.ultimoArquivoFiltrado || "—"}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Relatório do dia</span><strong className="text-white font-mono truncate max-w-[60%]">{nfEstado?.ultimoRelatorio || "—"}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Dados baixados</span><strong className="text-white">{nfEstado?.baixados ? (nfEstado.baixados / 1024).toFixed(1) + " KB" : "—"}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">D.I.s filtrados</span><strong className="text-white">{(nfEstado?.filtrados || 0).toLocaleString("pt-BR")}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Novos cadastrados</span><strong className="text-white">{(nfEstado?.novosCadastrados || 0).toLocaleString("pt-BR")}</strong></div>
+                  {nfEstado?.erro && (
+                    <div className="mt-2 p-2.5 rounded-xl bg-red-950/30 border border-red-500/25 text-red-400 text-[11px] leading-relaxed">
+                      <AlertTriangle className="w-3.5 h-3.5 inline mr-1" />
+                      {nfEstado.erro}
                     </div>
                   )}
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={handleNfSync}
+                  disabled={nfSyncing || nfEstado?.status === "em_andamento"}
+                  className="mt-5 w-full btn-gold-metallic py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {nfSyncing || nfEstado?.status === "em_andamento" ? (<><RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando...</>) : (<><RefreshCw className="w-4 h-4" /> SINCRONIZAR DADOS</>)}
+                </button>
+                {nfUltimoRelatorioResumo && (
+                  <details className="mt-3 text-[11px] bg-white/[0.03] border border-white/5 rounded-xl p-3">
+                    <summary className="text-[#8a96a3] font-bold cursor-pointer">Resumo do último relatório</summary>
+                    <pre className="mt-2 whitespace-pre-wrap text-[#a8b3bf] leading-relaxed">{nfUltimoRelatorioResumo}</pre>
+                  </details>
+                )}
+</div>
             </div>
+          </div>
+
+          {/* Logs da sincronização (em tempo real) */}
+          <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-5 shadow-xl">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
+                <Activity className="w-4 h-4 text-[#d12a62]" />
+                Logs da Sincronização
+              </h3>
+              {nfEstado?.status === "em_andamento" && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Ao vivo
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={baixarLogMd}
+                disabled={nfLogs.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[#a8b3bf] hover:text-white text-[11px] font-bold transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Exportar Log
+              </button>
+            </div>
+            <div className="max-h-64 overflow-y-auto rounded-xl bg-[#0b0f14] border border-white/5 p-3 font-mono text-[11px] leading-relaxed scrollbar-slim">
+              {nfLogs.length === 0 ? (
+                <span className="text-[#5c6672]">Nenhum log ainda. Clique em "SINCRONIZAR DADOS" para iniciar o processo.</span>
+              ) : nfLogs.map((log, i) => (
+                <div key={i} className={`flex gap-2 ${log.nivel === "erro" ? "text-red-400" : log.nivel === "ok" ? "text-emerald-400" : log.nivel === "aviso" ? "text-amber-400" : "text-[#a8b3bf]"}`}>
+                  <span className="text-[#5c6672] shrink-0">[{log.ts}]</span>
+                  <span>{log.msg}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Configuração: situações que podem logar */}
+          <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-6 shadow-xl">
+            <h3 className="text-sm font-bold text-white font-display mb-1 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-[#d12a62]" />
+              Quem pode acessar a área restrita
+            </h3>
+            <p className="text-[11px] text-[#8a96a3] mb-4">Marque as situações que podem logar no site. D.I.s com situação não marcada, mesmo cadastrados, não conseguem entrar.</p>
+            <div className="flex flex-wrap gap-3">
+              {[
+                { v: "A", l: "Ativos (A)" },
+                { v: "I", l: "Inativos (I)" },
+                { v: "P", l: "Pendentes (P)" },
+                { v: "S", l: "Suspensos (S)" },
+                { v: "D", l: "Descredenciados (D)" }
+              ].map((op) => (
+                <label key={op.v} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer ${nfSituacoes.includes(op.v) ? "bg-[#d12a62]/15 border-[#d12a62]/40 text-[#ff719e]" : "bg-white/5 border-white/10 text-[#8a96a3]"}`}>
+                  <input type="checkbox" checked={nfSituacoes.includes(op.v)} onChange={() => toggleNfSituacao(op.v)} className="accent-[#d12a62]" />
+                  {op.l}
+                </label>
+              ))}
+            </div>
+            <button type="button" onClick={handleSalvarSituacoes} className="mt-4 px-6 py-2.5 rounded-xl bg-[#d12a62]/15 border border-[#d12a62]/30 text-[#ff719e] text-xs font-bold cursor-pointer hover:bg-[#d12a62]/25 transition-colors">Salvar configuração</button>
+          </div>
+
+          {/* Lista de D.I.s */}
+          <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-6 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <h3 className="text-sm font-bold text-white font-display">Lista de D.I.s</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#5c6672]" />
+                  <input
+                    value={nfBusca}
+                    onChange={(e) => { setNfBusca(e.target.value); setNfPagina(1); }}
+                    placeholder="Buscar por nome ou código..."
+                    className="w-56 bg-[#0b0f14] border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-white outline-none focus:border-[#d12a62]/50"
+                  />
+                </div>
+                <select value={nfFiltroSit} onChange={(e) => { setNfFiltroSit(e.target.value); setNfPagina(1); }} className="bg-[#0b0f14] border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none">
+                  <option value="todos">Todas as situações</option>
+                  <option value="A">Ativos</option>
+                  <option value="I">Inativos</option>
+                  <option value="P">Pendentes</option>
+                  <option value="S">Suspensos</option>
+                  <option value="D">Descredenciados</option>
+                </select>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-[#8a96a3] uppercase tracking-wider text-[10px] border-b border-white/5">
+                    <th className="py-2 pr-2">Nome do D.I.</th>
+                    <th className="py-2 pr-2">Código D.I.</th>
+                    <th className="py-2">Situação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {nfItens.length === 0 ? (
+                    <tr><td colSpan={3} className="py-10 text-center text-[#8a96a3]">{nfCarregando ? "Carregando..." : "Nenhum D.I. encontrado. Rode a sincronização para popular a lista."}</td></tr>
+                  ) : nfItens.map((di) => (
+                    <tr key={di.codigo} className="hover:bg-white/[0.02]">
+                      <td className="py-2.5 pr-2 text-white font-medium">{di.nome}</td>
+                      <td className="py-2.5 pr-2 text-[#a8b3bf] font-mono">{di.codigo}</td>
+                      <td className="py-2.5"><NfSitBadge situacao={di.situacao} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
+              <span className="text-[11px] text-[#8a96a3]">{(nfTotal || 0).toLocaleString("pt-BR")} D.I.s</span>
+              <div className="flex items-center gap-2">
+                <button type="button" disabled={nfPagina <= 1} onClick={() => setNfPagina((p) => Math.max(1, p - 1))} className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-xs disabled:opacity-40 cursor-pointer">← Anterior</button>
+                <span className="text-[11px] text-[#8a96a3]">Pág. {nfPagina} de {nfTotalPaginas || 1}</span>
+                <button type="button" disabled={nfPagina >= (nfTotalPaginas || 1)} onClick={() => setNfPagina((p) => p + 1)} className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-xs disabled:opacity-40 cursor-pointer">Próxima →</button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
-
-      {/* TAB CONTENT: SUPORTE (USUÁRIOS DA ÁREA DE SUPORTE) */}
       {activeTab === "suporte" && (
         <div className="space-y-8 animate-fade-in">
         <div className="grid lg:grid-cols-12 gap-8">
@@ -3721,7 +3766,7 @@ export default function AdminView() {
                   Escolha uma versão da lista acima ou envie um arquivo de save guardado (por exemplo, depois de uma atualização que
                   deu errado). <strong className="text-white">Antes de aplicar, o sistema salva automaticamente o estado atual</strong>{" "}
                   (backup de segurança marcado com <span className="font-mono text-white">pré-restauração</span>) — toda restauração é reversível.
-                  Contas de acesso são recriadas se não existirem (a senha é definida pelo "esqueci minha senha", pois nunca é armazenada).
+                  Contas de acesso são recriadas se não existirem (a senha nunca é armazenada; o administrador redefine quando necessário).
                 </p>
               </div>
             </div>
@@ -4621,6 +4666,33 @@ export default function AdminView() {
 
       {/* TAB CONTENT 3: CURSOS CRUD */}
       {activeTab === "cursos" && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Sub-abas: Cursos | Treinamentos */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCursoSecao("cursos")}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                cursoSecao === "cursos"
+                  ? "bg-[#d12a62]/15 text-[#d12a62] border border-[#d12a62]/30"
+                  : "bg-white/5 text-[#94a3b8] border border-white/10 hover:text-white"
+              }`}
+            >
+              Cursos
+            </button>
+            <button
+              type="button"
+              onClick={() => setCursoSecao("treinamentos")}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                cursoSecao === "treinamentos"
+                  ? "bg-[#d12a62]/15 text-[#d12a62] border border-[#d12a62]/30"
+                  : "bg-white/5 text-[#94a3b8] border border-white/10 hover:text-white"
+              }`}
+            >
+              Treinamentos
+            </button>
+          </div>
+
         <div className="grid lg:grid-cols-12 gap-8 animate-fade-in">
           {/* Edit form */}
           <div className="lg:col-span-5">
@@ -4628,10 +4700,10 @@ export default function AdminView() {
               <div className="border-b border-white/5 pb-3">
                 <h3 className="text-base font-bold text-white font-display flex items-center gap-2">
                   <GraduationCap className="w-5 h-5 text-[#d12a62]" />
-                  ÁREA DE CADASTRO & UPLOAD DE CURSOS
+                  ÁREA DE CADASTRO & UPLOAD DE CURSOS E TREINAMENTOS
                 </h3>
                 <p className="text-[11px] text-[#8a96a3] mt-1">
-                  Cadastre Cursos (várias aulas), Séries (vídeo único) e Treinamentos (lives gravadas do Vimeo) na escola online.
+                  Cadastre Cursos (várias aulas) e Treinamentos (vídeo do Vimeo) na escola online.
                 </p>
               </div>
 
@@ -4670,14 +4742,13 @@ export default function AdminView() {
                   <select
                     value={cursoSecao}
                     onChange={(e) => {
-                      const v = e.target.value as "cursos" | "series" | "treinamentos";
+                      const v = e.target.value as "cursos" | "treinamentos";
                       setCursoSecao(v);
                     }}
                     className="w-full bg-[#0b0f14] border border-white/10 focus:border-[#d12a62]/50 rounded-xl p-3 text-xs text-[#e8edf2] outline-none transition-all focus:ring-1 focus:ring-[#d12a62]/30"
                   >
                     <option value="cursos">Cursos (várias aulas)</option>
-                    <option value="series">Séries (vídeo único)</option>
-                    <option value="treinamentos">Treinamentos (live gravada do Vimeo)</option>
+                    <option value="treinamentos">Treinamentos (vídeo do Vimeo)</option>
                   </select>
                 </div>
               </div>
@@ -4914,7 +4985,7 @@ export default function AdminView() {
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-[10px] uppercase font-bold text-white font-display tracking-wider flex items-center gap-1.5">
                     <ListVideo className="w-4 h-4 text-[#d12a62]" />
-                    {cursoSecao === "series" ? "Vídeos do Episódio *" : cursoSecao === "treinamentos" ? "Vídeos do Treinamento *" : "Vídeos do Curso *"}
+                    {cursoSecao === "treinamentos" ? "Vídeos do Treinamento *" : "Vídeos do Curso *"}
                   </span>
                   <button
                     type="button"
@@ -5065,10 +5136,10 @@ export default function AdminView() {
             <div className="bg-[#151b22]/50 border border-white/5 rounded-3xl p-6 shadow-2xl space-y-4">
               <div className="border-b border-white/5 pb-3 flex items-center justify-between">
                 <h3 className="text-base font-bold text-white font-display">
-                  Cursos e Conteúdos Hospedados na Escola
+                  {cursoSecao === "treinamentos" ? "Treinamentos Cadastrados" : "Cursos Cadastrados"}
                 </h3>
                 <span className="text-xs text-[#8a96a3] font-mono">
-                  {restrictedData?.cursos.length || 0} cursos cadastrados
+                  {adminCursosFiltrados.length} {cursoSecao === "treinamentos" ? "treinamentos" : "cursos"} cadastrados
                 </span>
               </div>
 
@@ -5077,12 +5148,12 @@ export default function AdminView() {
                   <div className="p-12 text-center text-[#8a96a3] text-xs animate-pulse">
                     Carregando grade da escola...
                   </div>
-                ) : restrictedData.cursos.length === 0 ? (
+                ) : adminCursosFiltrados.length === 0 ? (
                   <div className="p-12 text-center text-[#8a96a3] text-xs">
-                    Nenhum curso cadastrado ainda na escola.
+                    {cursoSecao === "treinamentos" ? "Nenhum treinamento cadastrado ainda." : "Nenhum curso cadastrado ainda na escola."}
                   </div>
                 ) : (
-                  restrictedData.cursos.map((c) => {
+                  adminCursosFiltrados.map((c) => {
                     const profName = c.professorNome || (c as any).professor_nome || "";
                     const profFoto = c.professorFoto || (c as any).professor_foto || "";
                     const profSpec = c.professorEspecialidade || (c as any).professor_especialidade || "";
@@ -5161,6 +5232,7 @@ export default function AdminView() {
               </div>
             </div>
           </div>
+        </div>
         </div>
       )}
 

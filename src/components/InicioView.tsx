@@ -270,7 +270,7 @@ export default function InicioView() {
         ...c,
         contentType: "course" as const,
         displayType: "course" as const,
-        displayCategory: c.secao === "series" ? "Série" : c.secao === "treinamentos" ? "Treinamento" : "Curso",
+        displayCategory: c.secao === "treinamentos" || c.secao === "series" ? "Treinamento" : "Curso",
         sortDate: getItemTimestamp(c)
       })),
     ...(materiais || [])
@@ -301,9 +301,9 @@ export default function InicioView() {
   const cursosList = sortByNewest(
     cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "cursos" || (!c.secao && c.categoria !== "Séries" && c.categoria !== "Treinamentos")))
   ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Curso" }));
-  const seriesList = sortByNewest(
-    cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "series" || c.categoria === "Séries"))
-  ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Série" }));
+  const treinamentosList = sortByNewest(
+    cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "treinamentos" || c.secao === "series" || c.categoria === "Séries" || c.categoria === "Treinamentos"))
+  ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Treinamento" }));
   const materiaisList = sortByNewest(materiais.filter(isCardVisibleOnHome)).map((m) => ({
     ...m,
     imagem: m.thumbnail || m.imagem,
@@ -372,6 +372,7 @@ export default function InicioView() {
                 lessons={item.modulos ? item.modulos.flatMap((m: any) => m.aulas) : []}
                 professorNome={item.professorNome}
                 professorFoto={item.professorFoto}
+                dataLive={item.createdAt}
                 onClick={() => handleCardClick(item, item.displayType || type)}
               />
             </div>
@@ -423,8 +424,8 @@ export default function InicioView() {
             />
 
             <CarouselRow
-              title="Séries em Destaque"
-              list={seriesList}
+              title="Treinamentos em Destaque"
+              list={treinamentosList}
               type="course"
               containerRef={refs.recomendados}
               viewAllAction={() => {

@@ -39,7 +39,7 @@ export default function EscolaFenixView() {
   const [activeTab, setActiveTab] = useState<"cursos" | "hub-marketing">("cursos");
 
   // Galeria interna: seção aberta em "Ver Todos"
-  const [galeriaSecao, setGaleriaSecao] = useState<"cursos" | "series" | "treinamentos" | null>(null);
+  const [galeriaSecao, setGaleriaSecao] = useState<"cursos" | "treinamentos" | null>(null);
 
   // Detailed view active states
   const [currentModuleIdx, setCurrentModuleIdx] = useState<number>(0);
@@ -419,7 +419,7 @@ export default function EscolaFenixView() {
             {activeCourse.descricao && (
               <div className="card-modern rounded-2xl p-6 space-y-2">
                 <h4 className="text-xs font-bold tracking-widest text-[#8a96a3] uppercase block">
-                  Sobre este {isSingle ? (activeCourse.secao === "series" ? "Episódio" : "Treinamento") : "Curso"}
+                  Sobre este {isSingle ? "Treinamento" : "Curso"}
                 </h4>
                 <p className="text-xs md:text-sm text-[#e8edf2] leading-relaxed">
                   {activeCourse.descricao}
@@ -585,12 +585,11 @@ export default function EscolaFenixView() {
 
   // 2. MAIN CATALOG LIST: seções estilo Netflix (linhas horizontais)
   const secaoOf = (c: Curso): Curso["secao"] =>
-    c.secao === "series" || c.secao === "treinamentos" ? c.secao : "cursos";
+    c.secao === "treinamentos" ? "treinamentos" : "cursos";
 
   const SECOES: { key: Curso["secao"]; label: string; desc: string }[] = [
     { key: "cursos", label: "Cursos", desc: "Formações completas com várias aulas" },
-    { key: "series", label: "Séries", desc: "Episódios únicos" },
-    { key: "treinamentos", label: "Treinamentos", desc: "Lives gravadas do Vimeo" }
+    { key: "treinamentos", label: "Treinamentos", desc: "Lives e vídeos únicos do Vimeo" }
   ];
 
   return (
@@ -611,7 +610,7 @@ export default function EscolaFenixView() {
             Catálogo de Conteúdos
           </h2>
           <p className="text-xs md:text-sm text-[#8a96a3]">
-            Explore cursos, séries e treinamentos de alto nível focados em escala, marketing e liderança.
+            Explore cursos e treinamentos de alto nível focados em escala, marketing e liderança.
           </p>
         </div>
       </div>

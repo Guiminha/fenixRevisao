@@ -2,6 +2,21 @@ import React, { useState } from "react";
 import { Film, Image as ImageIcon, FileText, GraduationCap } from "lucide-react";
 import { useStore } from "../store";
 
+function formatDataLive(value?: string): string {
+  if (!value) return "";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) {
+    // já pode vir como DD-MM-YYYY ou YYYY-MM-DD
+    const m = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return "";
+  }
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
 interface ContentCardProps {
   key?: any;
   id: string;
@@ -17,6 +32,7 @@ interface ContentCardProps {
   professorNome?: string;
   professorFoto?: string;
   professorEspecialidade?: string;
+  dataLive?: string;
 }
 
 export default function ContentCard({
@@ -32,7 +48,8 @@ export default function ContentCard({
   lessons = [],
   professorNome,
   professorFoto,
-  professorEspecialidade
+  professorEspecialidade,
+  dataLive
 }: ContentCardProps) {
   const { completedLessons } = useStore();
 
@@ -73,6 +90,9 @@ export default function ContentCard({
   };
 
   const progressPercent = getCourseProgress();
+
+  const isSerie = categoria === "Série" || categoria === "Series" || categoria === "Séries" || categoria === "Treinamento" || categoria === "Treinamentos";
+  const dataLiveFormatada = formatDataLive(dataLive);
 
   return (
     <div
@@ -125,10 +145,23 @@ export default function ContentCard({
       {/* Card Body below thumbnail */}
       <div className="p-3 sm:p-4.5 flex flex-col flex-grow justify-between bg-transparent">
         <div>
-          {/* Category */}
-          <span className="block text-[10px] sm:text-[11px] text-[#d12a62] font-bold uppercase tracking-wider mb-1 sm:mb-2">
-            {categoria}
-          </span>
+          {/* Linha de categoria/treinamento + data */}
+          {isSerie ? (
+            <div className="flex items-center justify-between mb-1 sm:mb-2">
+              <span className="text-[11px] sm:text-[12px] text-white font-bold uppercase tracking-wider">
+                Treinamento
+              </span>
+              {dataLiveFormatada && (
+                <span className="text-[11px] sm:text-[12px] text-white font-bold font-mono">
+                  {dataLiveFormatada}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className="block text-[10px] sm:text-[11px] text-[#d12a62] font-bold uppercase tracking-wider mb-1 sm:mb-2">
+              {categoria}
+            </span>
+          )}
           {/* Title */}
           <h3
             title={titulo}

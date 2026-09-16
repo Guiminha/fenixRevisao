@@ -23,7 +23,7 @@ export default function AdminLoginView() {
       const loggedInUser = useStore.getState().user;
 
       if (loggedInUser && loggedInUser.role !== "admin") {
-        setError("Autenticado, mas você não possui privilégios de administrador. Certifique-se de executar o comando UPDATE no SQL Editor do Supabase (descrito em supabase_schema.sql) para promover este e-mail para 'admin' no app_metadata.");
+        setError("E-mail e senha corretos, mas esta conta não possui privilégios de administrador. Entre em contato com o suporte para verificar sua permissão.");
         // Log out immediately to clear state
         useStore.getState().logout();
       } else {
