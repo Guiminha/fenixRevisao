@@ -17,22 +17,18 @@ Atualizado: 17/09/2026.
 
 ## Estado atual do trabalho (17/09/2026)
 
-### Feito (não commitado ainda — commits anteriores: 853158a, b80facc)
+### Feito (commits anteriores: 853158a, b80facc, 498b6fe, 439c05b)
 - **Menu admin renomeado:** "Cadastrar D.I." → "D.I.s Cadastrados" (Sidebar.tsx:99)
-- **Botão "Limpar Logs"** (frontend-only) na janela "Logs da Sincronização" (AdminView.tsx): limpa só a lista exibida (`setNfLogs([])`) + snapshot `nfLogsAncoradosRef` + `filtrarLogsNovos()` aplicado em `carregarNfStatus` e no auto-refresh → fica limpo até o próximo log; recarregar a página mostra tudo
-- **Recuperação de status travado** (`carregarEstadoInicial()`): se estado persistido for "em_andamento", reseta para "ok" na inicialização (processo caiu/reiniciou no meio do download)
+- **Botão "Limpar Logs"** (frontend-only) na janela "Logs da Sincronização" (AdminView.tsx)
+- **Recuperação de status travado** (`carregarEstadoInicial()`)
+- **Logo Energy Oficial:** Integrado no topo da página de Tecnologias (`PaginaBlocos.tsx`), tamanho ajustado 2.3x, espaçamentos otimizados e texto em 6 linhas com avanço para as margens do layout
+- **Materiais na Tela Inicial (Novidades e Biblioteca):** `/api/content/public` agora busca metadados de materiais com service role interno para contornar RLS em leitura pública sem expor arquivos confidenciais; rota `/api/storage/preview/*` liberada para imagens de capa de materiais
 - **storageService.ts** substitui minioService.ts; rotas `/api/storage/*`; sem MinIO e sem fallback em disco em todo o projeto
-- **statObject** usa HEAD (evita download inteiro → 404 em arquivos grandes)
-- **URLs no banco reescritas** para `/api/storage/preview/...` (banners 5, paginaBiografia 1, paginaTecnologias 5, paginaElite 2, cursos 9 capas, materiais 1, leader_bio 1) — via PATCH no PostgREST
-- **18 pastas** criadas no bucket (placeholders `.emptyFolderPlaceholder`)
-- **Capas preenchem 100%:** PaginaBlocos raiz sem `overflow-hidden` (Grupo Fênix/Elite/Tecnologias); HeroCarousel imagem `object-cover` sempre
 - **Login D.I.** aceita 4-6 dígitos (LoginModal.tsx)
 - **obterMetricasDis()** = 6 queries `count: "exact"` + card "Outros"
-- 22/22 imagens do site verificadas OK via GET
 
 ### Pendente / próximo
 - **"Resumo do último relatório"** (AdminView ~2756-2780, `<details>` após botão SINCRONIZAR): usuário quer que mostre **o que mudou de uma sync para outra** — novos cadastrados + mudanças de situação (ex.: ativo → inativo), não só contagem. Dados já existem: `NfRelatorio.situacoesAlteradas[]` {codigo, nome, anterior, nova} e `estado.novosCadastrados`
-- **Commit pendente** das mudanças acima (repo: github.com/Guiminha/fenixRevisao, main)
 - **Sync timeouts:** download get-cadastro = 15 min (`timeoutMs: 900_000`, nipponflexService.ts:218) — usuário decidiu manter 15 min (não 20)
 - **PDF do material "FOLDER ALCALINE MAX SQUEEZE" perdido** (nunca foi pro bucket) — usuário disse para ignorar
 

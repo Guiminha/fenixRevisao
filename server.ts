@@ -1249,8 +1249,8 @@ app.get("/api/auth/me", async (req: any, res) => {
 app.get("/api/content/public", async (req, res) => {
   try {
     const data = await cacheJsonResponse("content/public", 20000, async () => {
-      const dbData = await dbService.getData();
-      const categorias = await dbService.getCategoriasMateriais();
+      const dbData = await dbService.getData(undefined, true);
+      const categorias = await dbService.getCategoriasMateriais(undefined, true);
       return JSON.stringify({
       leaderBio: dbData.leaderBio,
       novidades: dbData.novidades,
@@ -4354,12 +4354,13 @@ app.get("/api/storage/preview/*", async (req, res) => {
     if (isBackupFamilyKey(objectKey)) {
       return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
     }
-    if (objectKey.startsWith("materiais/") && !isMaterialMediaAllowed(req, res)) {
-      return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
-    }
-
     const ext = fileExtOf(objectKey);
     const mime = EXT_TO_MIME[ext] || "application/octet-stream";
+    const isImage = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(objectKey);
+
+    if (objectKey.startsWith("materiais/") && !isImage && !isMaterialMediaAllowed(req, res)) {
+      return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
+    }
 
     const isExplicitDownload = req.query.download === "1" || req.query.download === "true";
     const getSafeFilename = () => {
