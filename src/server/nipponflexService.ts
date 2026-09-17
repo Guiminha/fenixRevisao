@@ -340,6 +340,20 @@ export async function carregarEstadoInicial(): Promise<void> {
   } catch {
     // usa o padrão em memória
   }
+
+  // Recuperação de estado travado: num servidor recém-iniciado nenhuma sync está
+  // rodando de verdade. Se o status persistido ficou "em_andamento" (ex.: o
+  // processo caiu/foi reiniciado no meio do download), destrava para "ok" — senão
+  // novas syncs ficariam bloqueadas para sempre e o polling de logs continuaria.
+  if (estado.status === "em_andamento") {
+    estado.status = "ok";
+    estado.erro = null;
+    try {
+      await persistirEstado();
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 export function getNfEstado(): NfEstado {

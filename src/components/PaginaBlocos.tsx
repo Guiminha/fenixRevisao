@@ -384,7 +384,7 @@ export default function PaginaBlocos({
 
   return (
     <>
-      <div className="relative bg-[#0b0f14] overflow-hidden">
+      <div className="relative bg-[#0b0f14]">
         {/* Degradê de fundo global e discreto (nas cores da marca) — atrás de todo o conteúdo */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[50rem] h-[50rem] rounded-full bg-[#d12a62]/8 blur-3xl" />

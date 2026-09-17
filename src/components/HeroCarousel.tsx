@@ -53,7 +53,7 @@ function HeroSlideImage({ slide, index, currentIndex }: { slide: any; index: num
       loading={index === currentIndex ? "eager" : "lazy"}
       decoding="async"
       fetchPriority={index === currentIndex ? "high" : undefined}
-      className="w-full h-full object-contain md:object-cover object-top"
+      className="w-full h-full object-cover object-top"
       
       onError={() => setErrou(true)}
     />

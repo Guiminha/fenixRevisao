@@ -96,7 +96,7 @@ export default function Sidebar() {
 
   const adminNavItems = [
     { id: "dashboard", label: "Visão Geral", icon: BarChart3 },
-    { id: "cadastrar-di", label: "Cadastrar D.I.", icon: KeyRound },
+    { id: "cadastrar-di", label: "D.I.s Cadastrados", icon: KeyRound },
     { id: "banners", label: "Banners Início", icon: Layers },
     { id: "cards-home", label: "Cards Tela Inicial", icon: Eye },
     { id: "cursos", label: "Cursos e Treinamentos", icon: GraduationCap },

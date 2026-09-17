@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { UploadProgressBar, UploadProgressState } from "./UploadProgressBar";
 import { uploadFileWithProgress } from "../utils/uploadWithProgress";
 import { useStore } from "../store";
@@ -161,6 +161,20 @@ export default function AdminView() {
   const [nfSyncing, setNfSyncing] = useState(false);
   const [nfCarregandoStatus, setNfCarregandoStatus] = useState(false);
   const [nfLogs, setNfLogs] = useState<any[]>([]);
+  // Quando "Limpar Logs" é clicado, guardamos um "marco": logs que existiam antes
+  // da limpeza. Assim o auto-refresh/recarregar só exibe logs NOVOS (que vieram
+  // depois da limpeza), mantendo a janela limpa até o próximo log.
+  const nfLogsAncoradosRef = useRef<any[] | null>(null);
+
+  // Filtra logs recebidos do backend: se houve limpeza nesta sessão, mostra só os
+  // que NÃO estavam no snapshot da limpeza; caso contrário, mostra tudo.
+  const filtrarLogsNovos = (incoming: any[]) => {
+    const ancora = nfLogsAncoradosRef.current;
+    if (!ancora || !Array.isArray(incoming)) return incoming;
+    return incoming.filter(
+      (l) => !ancora.some((a) => a && a.ts === l?.ts && a.msg === l?.msg)
+    );
+  };
 
   const NfSitBadge = ({ situacao }: { situacao: string }) => {
     const mapa: Record<string, { l: string; c: string }> = {
@@ -199,7 +213,7 @@ export default function AdminView() {
     if (res.success) {
       setNfEstado(res.estado);
       setNfMetricas(res.metricas);
-      setNfLogs(res.logs || []);
+      setNfLogs(filtrarLogsNovos(res.logs || []));
     }
     setNfCarregandoStatus(false);
   };
@@ -260,6 +274,14 @@ export default function AdminView() {
     URL.revokeObjectURL(url);
   };
 
+  // Limpa apenas a lista de logs exibida nesta tela (sem tocar no backend).
+  // Guarda o "marco" para que, enquanto esta sessão não recarregar a página,
+  // apenas logs NOVOS voltem a aparecer (fica limpo até o próximo log).
+  const handleLimparLogs = () => {
+    nfLogsAncoradosRef.current = nfLogs;
+    setNfLogs([]);
+  };
+
   useEffect(() => {
     if (activeTab === "cadastrar-di") {
       carregarNfStatus();
@@ -276,7 +298,7 @@ export default function AdminView() {
       if (res.success) {
         setNfEstado(res.estado);
         setNfMetricas(res.metricas);
-        setNfLogs(res.logs || []);
+        setNfLogs(filtrarLogsNovos(res.logs || []));
         // Quando termina, recarrega a lista de D.I.s
         if (res.estado?.status !== "em_andamento") {
           carregarNfDados();
@@ -2799,6 +2821,15 @@ export default function AdminView() {
               >
                 <Download className="w-3.5 h-3.5" />
                 Exportar Log
+              </button>
+              <button
+                type="button"
+                onClick={handleLimparLogs}
+                disabled={nfLogs.length === 0}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[#a8b3bf] hover:text-white hover:border-red-500/30 text-[11px] font-bold transition-colors disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Limpar Logs
               </button>
             </div>
             <div className="max-h-64 overflow-y-auto rounded-xl bg-[#0b0f14] border border-white/5 p-3 font-mono text-[11px] leading-relaxed scrollbar-slim">
