@@ -47,6 +47,8 @@ export interface NfRelatorio {
   baixados: number;
   filtrados: number;
   novosCadastrados: number;
+  // Detalhes completos dos D.I.s novos cadastrados nesta rodada (código + nome + situação)
+  novosDetalhes: { codigo: string; nome: string; situacao: string }[];
   situacoesAlteradas: { codigo: string; nome: string; anterior: string; nova: string }[];
   erros: string[];
 }
@@ -60,6 +62,9 @@ export interface NfEstado {
   baixados: number;
   filtrados: number;
   novosCadastrados: number;
+  // Detalhes completos dos D.I.s novos (persiste entre restarts via config)
+  novosDetalhes?: { codigo: string; nome: string; situacao: string }[];
+  situacoesAlteradas?: { codigo: string; nome: string; anterior: string; nova: string }[];
   erro: string | null;
   proximaSincronizacao: string | null;
   dataUltimaRodada: string | null;
@@ -75,6 +80,8 @@ let estado: NfEstado = {
   baixados: 0,
   filtrados: 0,
   novosCadastrados: 0,
+  novosDetalhes: [],
+  situacoesAlteradas: [],
   erro: null,
   proximaSincronizacao: null,
   dataUltimaRodada: null
@@ -283,9 +290,9 @@ function filtrarDados(rawText: string): { codigo: string; nome: string; situacao
 // ------------------------------------------------------------------
 // Sincronização com o Supabase (tabela dis_fenix)
 // ------------------------------------------------------------------
-async function sincronizarBanco(filtrados: { codigo: string; nome: string; situacao: string }[]): Promise<{ novos: string[]; alterados: { codigo: string; nome: string; anterior: string; nova: string }[] }> {
+async function sincronizarBanco(filtrados: { codigo: string; nome: string; situacao: string }[]): Promise<{ novos: { codigo: string; nome: string; situacao: string }[]; alterados: { codigo: string; nome: string; anterior: string; nova: string }[] }> {
   const client = supabaseClient();
-  const novos: string[] = [];
+  const novos: { codigo: string; nome: string; situacao: string }[] = [];
   const alterados: { codigo: string; nome: string; anterior: string; nova: string }[] = [];
 
   addLog("info", "Lendo D.I.s já cadastrados no banco (dis_fenix)...");
@@ -298,7 +305,8 @@ async function sincronizarBanco(filtrados: { codigo: string; nome: string; situa
 
   for (const l of linhas) {
     if (!mapaExistente.has(l.codigo)) {
-      novos.push(l.codigo);
+      // Novo D.I.: guarda objeto completo para o relatório de alterações
+      novos.push({ codigo: l.codigo, nome: l.nome, situacao: l.situacao });
     } else {
       const anterior = mapaExistente.get(l.codigo);
       if (anterior !== l.situacao) {
@@ -404,6 +412,7 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     baixados: 0,
     filtrados: 0,
     novosCadastrados: 0,
+    novosDetalhes: [],
     situacoesAlteradas: [],
     erros: []
   };
@@ -458,8 +467,11 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     addLog("info", "Sincronizando com o banco de dados (dis_fenix)...");
     const { novos, alterados } = await sincronizarBanco(filtrados);
     rel.novosCadastrados = novos.length;
+    rel.novosDetalhes = novos;
     rel.situacoesAlteradas = alterados;
     estado.novosCadastrados = novos.length;
+    estado.novosDetalhes = novos;
+    estado.situacoesAlteradas = alterados;
     addLog("ok", `${novos.length} novo(s) D.I.(s) cadastrado(s).`);
     if (alterados.length > 0) {
       addLog("info", `${alterados.length} D.I.(s) mudaram de situação.`);

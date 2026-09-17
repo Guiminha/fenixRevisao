@@ -4361,11 +4361,27 @@ app.get("/api/storage/preview/*", async (req, res) => {
     const ext = fileExtOf(objectKey);
     const mime = EXT_TO_MIME[ext] || "application/octet-stream";
 
+    const isExplicitDownload = req.query.download === "1" || req.query.download === "true";
+    const getSafeFilename = () => {
+      let safeName = (typeof req.query.filename === "string" && req.query.filename.trim())
+        ? req.query.filename.trim().replace(/[\r\n"]/g, "_")
+        : path.basename(objectKey).replace(/[\r\n"]/g, "_");
+      if (!path.extname(safeName) && ext) safeName += ext;
+      return safeName;
+    };
+
     const cacheHit = storagePreviewCacheGet(objectKey);
     if (cacheHit) {
       res.setHeader("Content-Type", cacheHit.mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
+      if (isExplicitDownload) {
+        const safeName = getSafeFilename();
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+      } else if (!INLINE_MEDIA_EXT.has(ext) && !objectKey.startsWith("fenix_social/")) {
+        const safeName = path.basename(objectKey).replace(/[\r\n"]/g, "_");
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+      }
       return res.end(cacheHit.data);
     }
 
@@ -4373,7 +4389,10 @@ app.get("/api/storage/preview/*", async (req, res) => {
 
     const stat = await withTimeout(client.statObject(STORAGE_BUCKET, objectKey), 1500, "Timeout no Storage");
     const dispositionHeaders = () => {
-      if (!INLINE_MEDIA_EXT.has(ext) && !objectKey.startsWith("fenix_social/")) {
+      if (isExplicitDownload) {
+        const safeName = getSafeFilename();
+        res.setHeader("Content-Disposition", `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
+      } else if (!INLINE_MEDIA_EXT.has(ext) && !objectKey.startsWith("fenix_social/")) {
         const safeName = path.basename(objectKey).replace(/[\r\n"]/g, "_");
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
       }
@@ -4394,13 +4413,13 @@ app.get("/api/storage/preview/*", async (req, res) => {
       storagePreviewCacheSet(objectKey, data, mime);
       res.setHeader("Content-Type", mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
       dispositionHeaders();
       res.end(data);
     } else {
       res.setHeader("Content-Type", mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
       dispositionHeaders();
       const stream = await client.getObject(STORAGE_BUCKET, objectKey);
       stream.pipe(res);

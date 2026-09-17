@@ -202,9 +202,16 @@ export default function AdminView() {
     ? "Sincronizando..."
     : "Nunca sincronizado";
 
-  const nfUltimoRelatorioResumo = nfEstado?.ultimoRelatorio
-    ? `Arquivo: ${nfEstado.ultimoRelatorio}\nBaixados: ${(nfEstado.baixados || 0).toLocaleString("pt-BR")} bytes\nFiltrados: ${(nfEstado.filtrados || 0).toLocaleString("pt-BR")} D.I.s\nNovos cadastrados: ${(nfEstado.novosCadastrados || 0).toLocaleString("pt-BR")}`
-    : null;
+  // Verifica se existe relatório com dados de alterações para exibir o card
+  const nfTemRelatorio = !!nfEstado?.ultimoRelatorio;
+  const nfNovosDetalhes: { codigo: string; nome: string; situacao: string }[] = (nfEstado as any)?.novosDetalhes || [];
+  const nfSituacoesAlteradas: { codigo: string; nome: string; anterior: string; nova: string }[] = nfEstado?.situacoesAlteradas || [];
+  // Agrupa as transições de situação: "A→I", "I→A", etc.
+  const nfTransicoesAgrupadas = nfSituacoesAlteradas.reduce((acc: Record<string, number>, alt) => {
+    const chave = `${alt.anterior}→${alt.nova}`;
+    acc[chave] = (acc[chave] || 0) + 1;
+    return acc;
+  }, {});
 
   const carregarNfStatus = async () => {
     if (nfCarregandoStatus) return;
@@ -2167,7 +2174,7 @@ export default function AdminView() {
   const [matId, setMatId] = useState("");
   const [matTitulo, setMatTitulo] = useState("");
   const [matTipo, setMatTipo] = useState<"image" | "video" | "pdf">("image");
-  const [matCategory, setMatCategory] = useState("Criativos");
+  const [matCategory, setMatCategory] = useState("Folders");
   const [matThumbnail, setMatThumbnail] = useState("");
   const [matThumbnailLoading, setMatThumbnailLoading] = useState(false);
   const [isDraggingMatThumbnail, setIsDraggingMatThumbnail] = useState(false);
@@ -2200,6 +2207,8 @@ export default function AdminView() {
       const res = await uploadFileWithProgress(file, "materiais", getAuthHeaders());
       if (res && res.success && (res.previewUrl || res.url)) {
         setMatFileUrl(res.previewUrl || res.url);
+        const isImg = file.type.startsWith("image/") || /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(file.name);
+        setMatTipo(isImg ? "image" : "pdf");
         triggerNotification("success", `Arquivo '${file.name}' enviado com sucesso para a pasta 'materiais/'!`);
       } else {
         triggerNotification("error", res?.error || "Erro ao enviar arquivo.");
@@ -2215,7 +2224,8 @@ export default function AdminView() {
   const [newCatName, setNewCatName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
-  const categoriasList = publicData?.categoriasMateriais || ["Criativos", "Copys", "Vendas", "Planejamento"];
+  const categoriasList = ["Folders", "Manuais"];
+
 
   const handleCreateCategory = async () => {
     const trimmed = newCatName.trim();
@@ -2259,8 +2269,17 @@ export default function AdminView() {
 
   const handleSaveMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!matTitulo || !matThumbnail || !matFileUrl) {
+    const isYTVideo = matTipo === "video";
+    if (!matTitulo || !matThumbnail) {
       triggerNotification("error", "Preencha todos os campos obrigatórios do material.");
+      return;
+    }
+    if (!matFileUrl) {
+      triggerNotification("error", isYTVideo ? "Insira o link do YouTube para o vídeo." : "Insira ou faça upload do arquivo do material.");
+      return;
+    }
+    if (isYTVideo && !/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/.test(matFileUrl)) {
+      triggerNotification("error", "O link informado não é um link válido do YouTube.");
       return;
     }
 
@@ -2791,17 +2810,109 @@ export default function AdminView() {
                 >
                   {nfSyncing || nfEstado?.status === "em_andamento" ? (<><RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando...</>) : (<><RefreshCw className="w-4 h-4" /> SINCRONIZAR DADOS</>)}
                 </button>
-                {nfUltimoRelatorioResumo && (
-                  <details className="mt-3 text-[11px] bg-white/[0.03] border border-white/5 rounded-xl p-3">
-                    <summary className="text-[#8a96a3] font-bold cursor-pointer">Resumo do último relatório</summary>
-                    <pre className="mt-2 whitespace-pre-wrap text-[#a8b3bf] leading-relaxed">{nfUltimoRelatorioResumo}</pre>
-                  </details>
-                )}
-</div>
+
+                {/* Card de Alterações da Última Atualização */}
+                {nfTemRelatorio && (() => {
+                  const semAlteracoes = nfNovosDetalhes.length === 0 && nfSituacoesAlteradas.length === 0;
+                  const nomeSit = (s: string) => ({ A: "Ativo", I: "Inativo", P: "Pendente", S: "Suspenso", D: "Descredenciado" } as Record<string, string>)[s] || s;
+                  const corSit = (s: string) => ({
+                    A: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
+                    I: "text-slate-300 bg-white/5 border-white/15",
+                    P: "text-amber-400 bg-amber-500/10 border-amber-500/25",
+                    S: "text-orange-400 bg-orange-500/10 border-orange-500/25",
+                    D: "text-red-400 bg-red-500/10 border-red-500/25"
+                  } as Record<string, string>)[s] || "text-slate-300 bg-white/5 border-white/15";
+                  return (
+                    <div className="mt-3 rounded-2xl border border-white/8 bg-white/[0.025] overflow-hidden">
+                      <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
+                        <Activity className="w-3.5 h-3.5 text-[#d12a62]" />
+                        <span className="text-[11px] font-bold text-white tracking-wide">Alterações da Última Atualização</span>
+                        <span className="ml-auto text-[10px] text-[#8a96a3] font-mono">{nfEstado?.dataUltimaRodada || ""}</span>
+                      </div>
+                      {semAlteracoes ? (
+                        <div className="flex flex-col items-center justify-center gap-2 py-5 px-4 text-center">
+                          <CheckCircle2 className="w-7 h-7 text-emerald-400" />
+                          <p className="text-[12px] font-semibold text-emerald-300">Base 100% em dia</p>
+                          <p className="text-[11px] text-[#8a96a3] leading-relaxed max-w-[220px]">
+                            Nenhuma alteração cadastral identificada — todos os D.I.s já estavam sincronizados.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="p-4 space-y-4">
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className={`rounded-xl border p-3 ${nfNovosDetalhes.length > 0 ? "bg-emerald-500/8 border-emerald-500/20" : "bg-white/[0.03] border-white/8"}`}>
+                              <div className={`text-xl font-black font-mono ${nfNovosDetalhes.length > 0 ? "text-emerald-400" : "text-[#8a96a3]"}`}>
+                                +{nfNovosDetalhes.length.toLocaleString("pt-BR")}
+                              </div>
+                              <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-0.5 font-bold">Novos ingressantes</div>
+                            </div>
+                            <div className={`rounded-xl border p-3 ${nfSituacoesAlteradas.length > 0 ? "bg-amber-500/8 border-amber-500/20" : "bg-white/[0.03] border-white/8"}`}>
+                              <div className={`text-xl font-black font-mono ${nfSituacoesAlteradas.length > 0 ? "text-amber-400" : "text-[#8a96a3]"}`}>
+                                {nfSituacoesAlteradas.length.toLocaleString("pt-BR")}
+                              </div>
+                              <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-0.5 font-bold">Mudanças de status</div>
+                            </div>
+                          </div>
+                          {Object.keys(nfTransicoesAgrupadas).length > 0 && (
+                            <div className="space-y-1.5">
+                              <p className="text-[10px] uppercase tracking-widest text-[#8a96a3] font-bold">Tipo de Alteração</p>
+                              {Object.entries(nfTransicoesAgrupadas).map(([transicao, qtd]) => {
+                                const [ant, nov] = transicao.split("→");
+                                return (
+                                  <div key={transicao} className="flex items-center gap-2 text-[11px]">
+                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${corSit(ant)}`}>{nomeSit(ant)}</span>
+                                    <ArrowUpRight className="w-3 h-3 text-[#8a96a3] flex-shrink-0" />
+                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${corSit(nov)}`}>{nomeSit(nov)}</span>
+                                    <span className="ml-auto text-[#8a96a3] font-mono font-bold">{(qtd as number).toLocaleString("pt-BR")} D.I.{(qtd as number) !== 1 ? "s" : ""}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {nfNovosDetalhes.length > 0 && (
+                            <details open={nfNovosDetalhes.length <= 5}>
+                              <summary className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#8a96a3] font-bold cursor-pointer hover:text-white transition-colors py-1">
+                                <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-0.5" />
+                                Novos D.I.s ({nfNovosDetalhes.length})
+                              </summary>
+                              <div className="mt-2 max-h-40 overflow-y-auto scrollbar-slim space-y-1">
+                                {nfNovosDetalhes.map((di) => (
+                                  <div key={di.codigo} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
+                                    <span className="font-mono text-[10px] text-emerald-400 font-bold w-12 flex-shrink-0">{di.codigo}</span>
+                                    <span className="text-[11px] text-[#e8edf2] flex-grow truncate">{di.nome}</span>
+                                    <span className={`px-1.5 py-0.5 rounded-full border text-[9px] font-bold ${corSit(di.situacao)} flex-shrink-0`}>{nomeSit(di.situacao)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                          {nfSituacoesAlteradas.length > 0 && (
+                            <details open={nfSituacoesAlteradas.length <= 5}>
+                              <summary className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#8a96a3] font-bold cursor-pointer hover:text-white transition-colors py-1">
+                                <span className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-0.5" />
+                                Mudanças de Situação ({nfSituacoesAlteradas.length})
+                              </summary>
+                              <div className="mt-2 max-h-40 overflow-y-auto scrollbar-slim space-y-1">
+                                {nfSituacoesAlteradas.map((alt) => (
+                                  <div key={alt.codigo} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-amber-500/5 border border-amber-500/10">
+                                    <span className="font-mono text-[10px] text-[#a8b3bf] font-bold w-12 flex-shrink-0">{alt.codigo}</span>
+                                    <span className="text-[11px] text-[#e8edf2] flex-grow truncate">{alt.nome}</span>
+                                    <span className={`px-1.5 py-0.5 rounded-full border text-[9px] font-bold ${corSit(alt.anterior)} flex-shrink-0`}>{nomeSit(alt.anterior)}</span>
+                                    <ArrowUpRight className="w-3 h-3 text-[#8a96a3] flex-shrink-0" />
+                                    <span className={`px-1.5 py-0.5 rounded-full border text-[9px] font-bold ${corSit(alt.nova)} flex-shrink-0`}>{nomeSit(alt.nova)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           </div>
-
-          {/* Logs da sincronização (em tempo real) */}
           <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-5 shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
@@ -5276,10 +5387,10 @@ export default function AdminView() {
               <div className="border-b border-white/5 pb-3">
                 <h3 className="text-base font-bold text-white font-display flex items-center gap-2">
                   <FolderDown className="w-5 h-5 text-[#d12a62]" />
-                  ÁREA DE CADASTRO & UPLOAD DE MATERIAIS
+                  ÁREA DE CADASTRO — MATERIAIS DE APOIO
                 </h3>
                 <p className="text-[11px] text-[#8a96a3] mt-1">
-                  Cadastre arquivos para download dos usuários (planilhas, PDFs, criativos, e-books).
+                  Cadastre folders, manuais e vídeos do YouTube para download e visualização pelos D.I.s.
                 </p>
               </div>
 
@@ -5299,82 +5410,16 @@ export default function AdminView() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Formato / Tipo de Arquivo</label>
-                  <select
-                    value={matTipo}
-                    onChange={(e) => setMatTipo(e.target.value as any)}
-                    className="w-full bg-[#0b0f14] border border-white/10 focus:border-[#d12a62]/50 rounded-xl p-3 text-xs text-[#e8edf2] outline-none transition-all"
-                  >
-                    <option value="image">Imagem / Criativo (PNG/JPG)</option>
-                    <option value="video">Vídeo para Stories / Reels (MP4)</option>
-                    <option value="pdf">Documento PDF / Planilha XLS</option>
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Categoria do Recurso *</label>
-                    <button
-                      type="button"
-                      onClick={() => setIsAddingCategory(!isAddingCategory)}
-                      className="text-[10px] text-[#d12a62] hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      {isAddingCategory ? "Concluído" : "+ Gerenciar Categorias"}
-                    </button>
-                  </div>
-
-                  {!isAddingCategory ? (
-                    <select
-                      value={matCategory}
-                      onChange={(e) => setMatCategory(e.target.value)}
-                      className="w-full bg-[#0b0f14] border border-white/10 focus:border-[#d12a62]/50 rounded-xl p-3 text-xs text-[#e8edf2] outline-none transition-all"
-                    >
-                      {categoriasList.map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div className="p-3 bg-black/40 border border-white/5 rounded-2xl space-y-3">
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newCatName}
-                          onChange={(e) => setNewCatName(e.target.value)}
-                          placeholder="Nova categoria..."
-                          className="flex-grow bg-[#0b0f14] border border-white/10 rounded-xl p-2 text-xs text-white outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleCreateCategory}
-                          className="bg-[#d12a62] text-black hover:bg-[#ff719e] font-bold text-xs px-3 rounded-xl transition-all cursor-pointer"
-                        >
-                          Adicionar
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-1 max-h-[100px] overflow-y-auto pr-1 scrollbar-slim">
-                        <p className="text-[8px] uppercase font-bold text-[#8a96a3] tracking-wider mb-1">Categorias Ativas:</p>
-                        {categoriasList.map((cat) => (
-                          <div key={cat} className="flex justify-between items-center text-[10px] py-1 border-b border-white/5 last:border-0">
-                            <span className="text-white font-medium">{cat}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteCategory(cat)}
-                              className="text-red-500 hover:text-red-400 font-bold px-1.5 rounded hover:bg-white/5"
-                              title="Remover Categoria"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Categoria do Recurso *</label>
+                <select
+                  value={matCategory}
+                  onChange={(e) => setMatCategory(e.target.value)}
+                  className="w-full bg-[#0b0f14] border border-white/10 focus:border-[#d12a62]/50 rounded-xl p-3 text-xs text-[#e8edf2] outline-none transition-all"
+                >
+                  <option value="Folders">Folders</option>
+                  <option value="Manuais">Manuais</option>
+                </select>
               </div>
 
               <div className="space-y-2">
@@ -5445,47 +5490,146 @@ export default function AdminView() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">Arquivo para Download (Storage: materiais/)</label>
-                
-                <div className="flex items-center gap-2">
-                  <label className="flex-1 cursor-pointer bg-[#131922] hover:bg-[#1a222e] border border-dashed border-white/20 hover:border-[#d12a62] rounded-xl p-3 flex items-center justify-center gap-2 transition-all group text-xs text-[#e8edf2]">
-                    {matFileLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 text-[#d12a62] animate-spin" />
-                        <span className="text-xs text-[#8a96a3]">Enviando arquivo para materiais/...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="w-4 h-4 text-[#d12a62] group-hover:scale-110 transition-transform" />
-                        <span className="font-medium text-xs">Fazer Upload de Arquivo (PDF, ZIP, DOC, etc.)</span>
-                      </>
-                    )}
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) handleMaterialDownloadFile(f);
-                      }}
-                    />
-                  </label>
+              {/* Seletor se é Vídeo do YouTube ou Arquivo */}
+              <div className="space-y-2 pt-2 border-t border-white/5">
+                <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">
+                  Tipo de Conteúdo do Material *
+                </label>
+                <div className="grid grid-cols-2 gap-2 p-1 bg-[#0b0f14] rounded-xl border border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (matTipo === "video") setMatTipo("pdf");
+                    }}
+                    className={`py-2.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      matTipo !== "video"
+                        ? "bg-[#d12a62]/20 text-white border border-[#d12a62]/40 shadow-sm"
+                        : "text-[#8a96a3] hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-[#ff719e]" />
+                    Arquivo (PDF, Fotos, DOC, Excel)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMatTipo("video")}
+                    className={`py-2.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      matTipo === "video"
+                        ? "bg-red-600/20 text-red-400 border border-red-500/40 shadow-sm"
+                        : "text-[#8a96a3] hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <Youtube className="w-3.5 h-3.5 text-red-500" />
+                    Vídeo do YouTube
+                  </button>
                 </div>
-
-                <div className="relative mt-2">
-                  <input
-                    type="text"
-                    value={matFileUrl}
-                    onChange={(e) => setMatFileUrl(e.target.value)}
-                    placeholder="OU insira a URL do arquivo..."
-                    className="w-full bg-[#0b0f14] border border-white/10 focus:border-[#d12a62]/50 rounded-xl p-3 pl-10 text-xs text-[#e8edf2] outline-none transition-all focus:ring-1 focus:ring-[#d12a62]/30 font-mono"
-                  />
-                  <Upload className="w-4 h-4 text-[#8a96a3] absolute left-3.5 top-3.5" />
-                </div>
-                <p className="text-[9px] text-[#8a96a3] leading-relaxed">
-                  Os arquivos enviados por esta ferramenta são salvos automaticamente na pasta <code className="text-[#d12a62]">materiais/</code> no Supabase Storage.
-                </p>
               </div>
+
+              {/* Campo Condicional: Vídeo do YouTube ou Upload Único de Arquivo */}
+              <div className="space-y-2">
+                {matTipo === "video" ? (
+                  <>
+                    <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+                      Link do Vídeo do YouTube *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={matFileUrl}
+                        onChange={(e) => setMatFileUrl(e.target.value)}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        className="w-full bg-[#0b0f14] border border-white/10 focus:border-red-500/50 rounded-xl p-3 pl-10 text-xs text-[#e8edf2] outline-none transition-all focus:ring-1 focus:ring-red-500/30 font-mono"
+                      />
+                      <Youtube className="w-4 h-4 text-red-500 absolute left-3.5 top-3.5" />
+                    </div>
+                    <p className="text-[9px] text-[#8a96a3] leading-relaxed">
+                      Upload de arquivos desabilitado. Este material é um vídeo — os D.I.s assistirão em um modal embutido.
+                    </p>
+                    {matFileUrl && /youtube\.com|youtu\.be/.test(matFileUrl) && (
+                      <div className="flex items-center gap-2 p-2.5 bg-green-500/10 border border-green-500/20 rounded-xl">
+                        <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+                        <span className="text-green-400 text-[11px] font-semibold">Link do YouTube reconhecido</span>
+                      </div>
+                    )}
+                    {matFileUrl && !/youtube\.com|youtu\.be/.test(matFileUrl) && (
+                      <div className="flex items-center gap-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+                        <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
+                        <span className="text-red-400 text-[11px] font-semibold">Link não reconhecido como YouTube</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label className="text-[10px] uppercase font-bold text-[#8a96a3] font-display tracking-wider block">
+                      Upload de Arquivo (Fotos, PDF, DOC, Excel) *
+                    </label>
+                    
+                    {matFileUrl && !matFileLoading ? (
+                      <div className="p-3 bg-[#0b0f14] border border-emerald-500/30 rounded-xl flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-white truncate">
+                              Arquivo pronto para download
+                            </p>
+                            <p className="text-[10px] text-[#8a96a3] font-mono truncate">
+                              {matFileUrl}
+                            </p>
+                          </div>
+                        </div>
+                        <label className="cursor-pointer px-3 py-1.5 bg-white/10 hover:bg-white/15 text-white text-[11px] font-medium rounded-lg transition-colors flex-shrink-0 flex items-center gap-1.5">
+                          <Upload className="w-3 h-3" />
+                          Trocar Arquivo
+                          <input
+                            type="file"
+                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleMaterialDownloadFile(f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer bg-[#0b0f14]/60 hover:bg-[#0b0f14] border border-dashed border-white/20 hover:border-[#d12a62] rounded-2xl p-6 flex flex-col items-center justify-center gap-2 transition-all group text-center block">
+                        {matFileLoading ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <Loader2 className="w-6 h-6 text-[#d12a62] animate-spin" />
+                            <span className="text-xs text-[#8a96a3]">Enviando arquivo para o Storage (materiais/)...</span>
+                          </div>
+                        ) : (
+                          <>
+                            <Upload className="w-6 h-6 text-[#d12a62] group-hover:scale-110 transition-transform" />
+                            <div className="text-xs text-white font-medium">
+                              Arraste um arquivo ou <span className="text-[#d12a62] font-semibold underline">clique para selecionar</span>
+                            </div>
+                            <p className="text-[10px] text-[#8a96a3]">
+                              Formatos aceitos: Fotos (PNG/JPG), PDF, DOC, DOCX, XLS, XLSX, ZIP
+                            </p>
+                          </>
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleMaterialDownloadFile(f);
+                          }}
+                        />
+                      </label>
+                    )}
+                    <p className="text-[9px] text-[#8a96a3] leading-relaxed">
+                      Os arquivos enviados por esta ferramenta são salvos automaticamente na pasta <code className="text-[#d12a62]">materiais/</code> no Supabase Storage.
+                    </p>
+                  </>
+                )}
+              </div>
+
 
               {matThumbnail ? (
                 <div className="rounded-xl overflow-hidden border border-white/5 aspect-video relative group">

@@ -44,7 +44,7 @@ const TIPO_LABEL: Record<PaginaBlocoTipo, string> = Object.fromEntries(
 
 // Quais campos cada tipo de bloco realmente usa no renderizador (PaginaBlocos).
 const CAMPOS_POR_TIPO: Record<PaginaBlocoTipo, (keyof PaginaBlocoCampos | "faq")[]> = {
-  banner: ["badge", "titulo", "tituloDestaque", "textos"],
+  banner: ["badge", "titulo", "logo", "tituloDestaque", "textos"],
   hero_banner: ["badge", "titulo", "tituloDestaque", "textos", "imagem", "imagemAlt"],
   hero_header: ["icone", "cor", "eyebrow", "titulo", "textos"],
   card_tecnologia: ["icone", "cor", "eyebrow", "titulo", "badge", "textos", "imagem", "imagemAlt", "destaqueTitulo", "destaqueTexto", "notaTexto"],
@@ -61,6 +61,7 @@ const LABEL_CAMPO: Record<string, string> = {
   badgeImagem: "Imagem do selo",
   eyebrow: "Chamada (eyebrow)",
   titulo: "Título",
+  logo: "Logo / Emblema (imagem)",
   tituloDestaque: "Destaque do título (gradiente)",
   textos: "Textos (um por linha)",
   destaqueTitulo: "Título do destaque",
@@ -249,7 +250,7 @@ export default function PaginaEditor() {
     setMsg({ tipo: "ok", texto: `Bloco "${TIPO_LABEL[tipo]}" adicionado. Preencha os campos e clique em Salvar.` });
   };
 
-  const uploadImagem = async (file: File) => {
+  const uploadImagem = async (file: File, campoAlvo: "imagem" | "logo" = "imagem") => {
     if (!file.type.startsWith("image/")) {
       setMsg({ tipo: "erro", texto: "Selecione uma imagem válida (PNG, JPG, WEBP)." });
       return;
@@ -259,7 +260,7 @@ export default function PaginaEditor() {
     try {
       const res = await uploadFileWithProgress(file, "paginas", getAuthHeaders());
       if (res && res.success && (res.previewUrl || res.url)) {
-        setCampo("imagem", res.previewUrl || res.url);
+        setCampo(campoAlvo, res.previewUrl || res.url);
         setMsg({ tipo: "ok", texto: "Imagem enviada (pasta paginas/)." });
       } else {
         setMsg({ tipo: "erro", texto: res?.error || "Erro no upload da imagem." });
@@ -307,17 +308,19 @@ export default function PaginaEditor() {
 
   const renderCampo = (nome: string, campos: PaginaBlocoCampos) => {
     const valorTexto = String((campos as any)[nome] || "");
-    if (nome === "imagem") {
+    if (nome === "imagem" || nome === "logo") {
+      const campoKey = nome as "imagem" | "logo";
+      const valorImg = campos[campoKey];
       return (
         <div>
-          <span className="text-[10px] font-bold text-[#8a96a3] uppercase tracking-wider">{LABEL_CAMPO.imagem}</span>
+          <span className="text-[10px] font-bold text-[#8a96a3] uppercase tracking-wider">{LABEL_CAMPO[nome] || nome}</span>
           <div className="mt-1 flex flex-wrap items-center gap-3">
-            {campos.imagem && (
-              <img src={campos.imagem} alt="" className="w-28 h-20 object-cover rounded-xl border border-white/10" />
+            {valorImg && (
+              <img src={valorImg} alt="" className="w-28 h-20 object-contain bg-black/40 p-1 rounded-xl border border-white/10" />
             )}
             <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-slate-200 hover:bg-white/10 transition-colors">
               <Upload className="w-3.5 h-3.5" />
-              {uploadingImg ? "Enviando..." : (campos.imagem ? "Trocar imagem" : "Enviar imagem")}
+              {uploadingImg ? "Enviando..." : (valorImg ? "Trocar imagem" : "Enviar imagem")}
               <input
                 type="file"
                 accept="image/*"
@@ -325,13 +328,13 @@ export default function PaginaEditor() {
                 disabled={uploadingImg}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
-                  if (f) uploadImagem(f);
+                  if (f) uploadImagem(f, campoKey);
                   e.target.value = "";
                 }}
               />
             </label>
-            {campos.imagem && (
-              <button onClick={() => setCampo("imagem", "")} className="p-2 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-300 cursor-pointer" title="Remover imagem">
+            {valorImg && (
+              <button onClick={() => setCampo(campoKey, "")} className="p-2 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-300 cursor-pointer" title="Remover imagem">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}

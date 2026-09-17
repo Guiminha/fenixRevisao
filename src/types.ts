@@ -268,6 +268,7 @@ export interface PaginaBlocoCampos {
   badgeImagem?: string;
   eyebrow?: string;
   titulo?: string;
+  logo?: string;
   tituloDestaque?: string;
   textos?: string[];
   destaqueTitulo?: string;

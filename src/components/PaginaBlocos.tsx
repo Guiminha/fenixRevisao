@@ -92,20 +92,30 @@ export default function PaginaBlocos({
             key={bloco.id}
             className={
               fullBleedTop
-                ? `${FULL_BLEED} relative overflow-hidden bg-gradient-to-br from-[#0b0f14] via-[#1a1020] to-[#0b0f14] px-6 py-14 sm:px-12 sm:py-20 text-slate-100`
-                : "relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#0b0f14] via-[#1a1020] to-[#0b0f14] px-6 py-14 sm:px-12 sm:py-20 text-slate-100"
+                ? `${FULL_BLEED} relative overflow-hidden bg-gradient-to-br from-[#0b0f14] via-[#1a1020] to-[#0b0f14] px-4 py-14 sm:px-8 xl:px-12 sm:py-20 text-slate-100`
+                : "relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#0b0f14] via-[#1a1020] to-[#0b0f14] px-4 py-14 sm:px-8 xl:px-12 sm:py-20 text-slate-100"
             }
           >
             <FundoDecorativo cor={cor ? cor.fg ? "rosa" : campos.cor || "rosa" : "rosa"} />
             <div className="absolute top-0 right-0 -mt-24 -mr-24 w-[28rem] h-[28rem] rounded-full bg-[#d12a62]/10 blur-3xl pointer-events-none" />
-            <div className="relative z-10 max-w-4xl mx-auto text-center space-y-6">
+            <div className="relative z-10 max-w-[90rem] mx-auto text-center space-y-6">
               {/* Título em caixa alta (remove traço residual " — " do dado, se houver) */}
-              <h1 className="text-[clamp(1.4rem,4vw,9rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] break-words">
+              <h1 className="text-[clamp(1.4rem,4vw,9rem)] font-black uppercase tracking-tight text-white font-display leading-[1.1] break-words max-w-4xl mx-auto">
                 {(campos.titulo || "").replace(/\s*[—–-]\s*$/, "").trim()}
               </h1>
-              {/* Subtítulo logo abaixo do título */}
+              {/* Logo entre o título e o subtítulo */}
+              {campos.logo && (
+                <div className="flex justify-center items-center -mt-7 sm:-mt-9 md:-mt-10 -mb-1 sm:-mb-0.5">
+                  <img
+                    src={campos.logo}
+                    alt="Logo Energy"
+                    className="h-[110px] sm:h-[148px] md:h-[184px] w-auto object-contain max-w-[644px] sm:max-w-[828px] drop-shadow-xl"
+                  />
+                </div>
+              )}
+              {/* Subtítulo logo abaixo do título/logo */}
               {campos.tituloDestaque && (
-                <p className="text-[clamp(1.43rem,2.2vw,4.5rem)] font-semibold bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent">
+                <p className="text-[clamp(1.43rem,2.2vw,4.5rem)] font-semibold bg-gradient-to-r from-white via-slate-200 to-[#ff719e] bg-clip-text text-transparent max-w-4xl mx-auto">
                   {campos.tituloDestaque}
                 </p>
               )}
@@ -120,10 +130,10 @@ export default function PaginaBlocos({
               )}
               {/* Parágrafo normal */}
               {textos[0] && (
-                <p className="text-[clamp(1rem,1.5vw,1.4rem)] text-slate-300 leading-relaxed max-w-3xl mx-auto font-light">{textos[0]}</p>
+                <p className="text-[clamp(1rem,1.5vw,1.4rem)] text-slate-300 leading-relaxed max-w-[1340px] 2xl:max-w-[1440px] mx-auto font-light">{textos[0]}</p>
               )}
               {textos.length > 1 && (
-                <div className="pt-4 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-[clamp(0.875rem,1.1vw,1rem)] text-slate-400">
+                <div className="pt-4 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-[clamp(0.875rem,1.1vw,1rem)] text-slate-400 max-w-4xl mx-auto">
                   {textos.slice(1).map((item, i) => (
                     <div key={i} className="flex items-center gap-2.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-gradient-to-r from-[#ff719e] to-[#d12a62] shrink-0" />

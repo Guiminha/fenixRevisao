@@ -296,14 +296,14 @@ export default function InicioView() {
       }))
   ];
 
-  // Novidades section displays all published site content, ordered by newest first
-  const novidadesList = [...allContents].sort((a, b) => b.sortDate - a.sortDate);
   const cursosList = sortByNewest(
     cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "cursos" || (!c.secao && c.categoria !== "Séries" && c.categoria !== "Treinamentos")))
   ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Curso" }));
+
   const treinamentosList = sortByNewest(
     cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "treinamentos" || c.secao === "series" || c.categoria === "Séries" || c.categoria === "Treinamentos"))
   ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Treinamento" }));
+
   const materiaisList = sortByNewest(materiais.filter(isCardVisibleOnHome)).map((m) => ({
     ...m,
     imagem: m.thumbnail || m.imagem,
@@ -311,6 +311,51 @@ export default function InicioView() {
     displayType: "material" as const,
     displayCategory: m.categoria ? `Conteúdo • ${m.categoria}` : "Conteúdo"
   }));
+
+  const explicitNovidades = sortByNewest(
+    (novidades || []).filter((n) => isCardVisibleOnHome(n))
+  ).map((n) => {
+    const isMaterial = (n as any).contentType === "material" || n.linkType === "material" || (n as any).fileUrl || ((n.linkType as string) === "pagina" && n.linkTarget === "conteudos");
+    return {
+      ...n,
+      contentType: isMaterial ? ("material" as const) : ("news" as const),
+      displayType: isMaterial ? ("material" as const) : ("news" as const),
+      displayCategory: n.categoria || "Novidade",
+      sortDate: getItemTimestamp(n)
+    };
+  });
+
+  // Vitrine de lançamento inteligente: alterna Cursos, Treinamentos e Materiais
+  const mixLancamento: any[] = [];
+  const seenIds = new Set<string>();
+
+  // Prioriza novidades explícitas se cadastradas
+  for (const item of explicitNovidades) {
+    if (!seenIds.has(item.id)) {
+      mixLancamento.push(item);
+      seenIds.add(item.id);
+    }
+  }
+
+  // Intercala 1 Curso -> 1 Treinamento -> 1 Material sequencialmente
+  const maxItems = Math.max(cursosList.length, treinamentosList.length, materiaisList.length);
+  for (let i = 0; i < maxItems && mixLancamento.length < 24; i++) {
+    if (cursosList[i] && !seenIds.has(cursosList[i].id)) {
+      mixLancamento.push(cursosList[i]);
+      seenIds.add(cursosList[i].id);
+    }
+    if (treinamentosList[i] && !seenIds.has(treinamentosList[i].id)) {
+      mixLancamento.push(treinamentosList[i]);
+      seenIds.add(treinamentosList[i].id);
+    }
+    if (materiaisList[i] && !seenIds.has(materiaisList[i].id)) {
+      mixLancamento.push(materiaisList[i]);
+      seenIds.add(materiaisList[i].id);
+    }
+  }
+
+  // Novidades section exibe o mix equilibrado para o lançamento
+  const novidadesList = mixLancamento.length > 0 ? mixLancamento : [...allContents].sort((a, b) => b.sortDate - a.sortDate);
   const emAltaList = sortByNewest(allContents.filter((item) => item.categoria === "Em Alta" || item.isPremium || item.isFeatured));
 
   const CarouselRow = ({

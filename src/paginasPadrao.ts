@@ -1,4 +1,4 @@
-﻿import type { PaginaBloco } from "./types";
+import type { PaginaBloco } from "./types";
 
 // Conteúdo padrão das páginas institucionais editáveis.
 // As views (Grupo Fênix / Tecnologias / Elite Milionária) usam estes valores
@@ -14,8 +14,9 @@ export const PAGINA_TECNOLOGIAS_PADRAO: PaginaBloco[] = [
     ordem: 0,
     campos: {
       badge: "Ciência & Exclusividade Nipponflex",
-      titulo: "Tecnologias Nipponflex — ",
-      tituloDestaque: "A ciência do bem-estar em cada detalhe",
+      titulo: "Tecnologias",
+      logo: "/api/storage/preview/paginas%2F1789685744955_4bdbbbe4_energy_04.png",
+      tituloDestaque: "A CIENCIA DO BEM ESTAR E LONGEVIDADE PARA CADA PARTE DO SEU CORPO",
       textos: [
         "O sono reparador e o equilíbrio corporal são pilares fundamentais para uma vida longa e repleta de bem-estar. Nossos sistemas científicos integram o ápice da engenharia biomédica e da tecnologia bioenergética, desenvolvidas em parceria exclusiva com o renomado cientista japonês Dr. Toshio Komuro. Descubra como cada elemento foi minuciosamente desenvolvido para transformar suas noites e elevar o seu bem-estar diário.",
         "Patenteado em mais de 40 países",

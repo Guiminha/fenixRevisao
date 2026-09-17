@@ -90,7 +90,7 @@ export default function Sidebar() {
     { id: "tecnologias", label: "Tecnologias", icon: Brain },
     { id: "elite-milionario", label: "Elite Milionária", icon: Crown },
     { id: "escola-fenix", label: "Escola Fênix", icon: GraduationCap, restricted: true },
-    { id: "conteudos", label: "Conteúdos", icon: FolderDown, restricted: true },
+    { id: "conteudos", label: "Materiais de Apoio", icon: FolderDown, restricted: true },
     { id: "suporte", label: "Suporte", icon: LifeBuoy, restricted: true }
   ];
 
@@ -100,7 +100,7 @@ export default function Sidebar() {
     { id: "banners", label: "Banners Início", icon: Layers },
     { id: "cards-home", label: "Cards Tela Inicial", icon: Eye },
     { id: "cursos", label: "Cursos e Treinamentos", icon: GraduationCap },
-    { id: "materiais", label: "Materiais", icon: FolderDown },
+    { id: "materiais", label: "Materiais de Apoio", icon: FolderDown },
     { id: "fenix-social", label: "Fênix Social", icon: Flame },
     { id: "suporte", label: "Suporte", icon: LifeBuoy },
     { id: "paginas", label: "Páginas", icon: FileText },
