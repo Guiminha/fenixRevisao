@@ -147,12 +147,12 @@ export default function ContentCard({
         <div>
           {/* Linha de categoria/treinamento + data */}
           {isSerie ? (
-            <div className="flex items-center justify-between mb-1 sm:mb-2">
-              <span className="text-[11px] sm:text-[12px] text-white font-bold uppercase tracking-wider">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 sm:gap-0 mb-1 sm:mb-2">
+              <span className="text-[10px] sm:text-[12px] text-white font-bold uppercase tracking-wider">
                 Treinamento
               </span>
               {dataLiveFormatada && (
-                <span className="text-[11px] sm:text-[12px] text-white font-bold font-mono">
+                <span className="text-[10px] sm:text-[12px] text-white/90 font-bold font-mono">
                   {dataLiveFormatada}
                 </span>
               )}

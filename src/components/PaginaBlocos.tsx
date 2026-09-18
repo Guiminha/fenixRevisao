@@ -109,7 +109,7 @@ export default function PaginaBlocos({
                   <img
                     src={campos.logo}
                     alt="Logo Energy"
-                    className="h-[110px] sm:h-[148px] md:h-[184px] w-auto object-contain max-w-[644px] sm:max-w-[828px] drop-shadow-xl"
+                    className="w-full max-w-[280px] h-auto sm:w-auto sm:h-[148px] md:h-[184px] object-contain sm:max-w-[828px] drop-shadow-xl"
                   />
                 </div>
               )}

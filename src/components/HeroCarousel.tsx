@@ -196,10 +196,10 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   return (
     <div 
       id="hero-carousel-container"
-      className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[320px] overflow-hidden select-none"
+      className="flex flex-col sm:block sm:relative w-full sm:aspect-[21/9] sm:min-h-[320px] select-none"
     >
-      {/* Background Slides Track */}
-      <div className="absolute inset-0 w-full h-full">
+      {/* Área da imagem — no mobile tem proporção própria e overflow hidden; no desktop é fundo absoluto */}
+      <div className="relative w-full aspect-[16/9] min-h-[200px] sm:aspect-auto sm:absolute sm:inset-0 sm:min-h-0 overflow-hidden">
         {activeSlides.map((slide, index) => (
           <div
             key={slide.id}
@@ -210,20 +210,41 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
             <HeroSlideImage slide={slide} index={index} currentIndex={currentIndex} />
           </div>
         ))}
+
+        {/* Dot indicators ficam sobre a imagem (mobile e desktop) */}
+        {activeSlides.length > 1 && (
+          <div className="absolute bottom-3 left-4 sm:bottom-8 sm:left-12 z-25 flex items-center gap-1.5 md:gap-2">
+            {activeSlides.map((_, index) => (
+              <button
+                key={index}
+                id={`hero-carousel-dot-${index}`}
+                onClick={() => setCurrentIndex(index)}
+                className={`h-1 transition-all duration-300 ${
+                  index === currentIndex 
+                    ? "w-6 md:w-8 bg-[#d12a62] shadow-[0_0_8px_rgba(209,42,98,0.4)]" 
+                    : "w-1.5 md:w-2 bg-white/20 hover:bg-white/40 cursor-pointer"
+                }`}
+                aria-label={`Slide ${index + 1}`}
+              ></button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* GRADIENT OVERLAYS - Localized to text area for maximum image visibility */}
+      {/* GRADIENT OVERLAYS — visíveis apenas no desktop (sobre a imagem) */}
       {/* Light top gradient for navbar readability */}
-      <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[#0b0f14]/35 to-transparent z-15 pointer-events-none" />
+      <div className="hidden sm:block absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[#0b0f14]/35 to-transparent z-15 pointer-events-none" />
       
-      {/* Bottom-left localized gradient strictly around title, description & buttons (increased opacity for better text contrast) */}
-      <div className="absolute inset-0 bg-gradient-to-tr from-[#0b0f14]/95 via-[#0b0f14]/35 via-40% to-transparent z-15 pointer-events-none" />
+      {/* Bottom-left localized gradient strictly around title, description & buttons */}
+      <div className="hidden sm:block absolute inset-0 bg-gradient-to-tr from-[#0b0f14]/95 via-[#0b0f14]/35 via-40% to-transparent z-15 pointer-events-none" />
       
-      {/* Subtle bottom edge blend to smooth transition into page content */}
-      <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent z-15 pointer-events-none" />
+      {/* Subtle bottom edge blend */}
+      <div className="hidden sm:block absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#0b0f14] to-transparent z-15 pointer-events-none" />
 
-      {/* Slide Content Overlay */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-end p-4 sm:p-8 lg:p-12 w-full max-w-[60%] animate-fade-in pb-10 sm:pb-8">
+      {/* Slide Content:
+          Mobile  → elemento de fluxo abaixo da imagem, largura total, fundo escuro, padding normal
+          Desktop → overlay absoluto, max-w-[60%], fundo transparente (gradiente cobre) */}
+      <div className="relative sm:absolute sm:inset-0 z-20 flex flex-col sm:justify-end p-4 sm:p-8 lg:p-12 w-full sm:max-w-[60%] animate-fade-in pb-6 sm:pb-8 bg-gradient-to-b from-[#0d1219] to-[#0b0f14] sm:bg-none border-b sm:border-b-0 border-white/[0.05]">
         <motion.div
           key={currentSlide.id + "-" + safeIndex}
           initial="hidden"
@@ -342,24 +363,6 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
         </motion.div>
       </div>
 
-      {/* Carousel Dot Indicators (Glow active, translucent white inactive) */}
-      {activeSlides.length > 1 && (
-        <div className="absolute bottom-5 left-5 md:bottom-8 md:left-12 z-25 flex items-center gap-1.5 md:gap-2">
-          {activeSlides.map((_, index) => (
-            <button
-              key={index}
-              id={`hero-carousel-dot-${index}`}
-              onClick={() => setCurrentIndex(index)}
-              className={`h-1 transition-all duration-300 ${
-                index === currentIndex 
-                  ? "w-6 md:w-8 bg-[#d12a62] shadow-[0_0_8px_rgba(209,42,98,0.4)]" 
-                  : "w-1.5 md:w-2 bg-white/20 hover:bg-white/40 cursor-pointer"
-              }`}
-              aria-label={`Slide ${index + 1}`}
-            ></button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
