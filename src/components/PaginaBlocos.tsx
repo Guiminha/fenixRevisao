@@ -153,8 +153,8 @@ export default function PaginaBlocos({
         return (
           <section key={bloco.id} className={fullBleedTop ? `${FULL_BLEED} bg-[#07090e]` : "relative overflow-hidden rounded-[2rem] bg-[#07090e]"}>
             {campos.imagem ? (
-              <div className="relative w-full aspect-[21/9] min-h-[240px] sm:min-h-[320px]">
-                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-cover object-top" />
+              <div className="relative w-full aspect-[4/3] sm:aspect-[21/9] min-h-[240px] sm:min-h-[320px]">
+                <BlocoImg src={campos.imagem} alt={campos.imagemAlt || ""} className="w-full h-full object-cover object-center sm:object-top" />
                 {!coverSemTexto && (
                   <>
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0b0f14]/85 via-[#0b0f14]/25 to-black/20" />
