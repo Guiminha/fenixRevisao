@@ -180,10 +180,23 @@ export default function SupportApp() {
   const [leadStatusLoading, setLeadStatusLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tipo: "success" | "error"; texto: string } | null>(null);
   const [loading, setLoading] = useState(true);
-  // "Visto em" por item (epoch ms) — controla os avisos de mensagem nova na sessão.
-  const [lastSeen, setLastSeen] = useState<Record<string, number>>({});
-  // Chamados marcados manualmente como "não lida" (distintos dos que receberam
-  // mensagem nova de verdade: ficam abaixo destas, mas acima de lidos/respondidos).
+  // Tickets que o suporte JÁ RESPONDEU — persistido no localStorage.
+  // Um ticket sai daqui quando o cliente envia nova mensagem depois da resposta.
+  // Isso garante que tickets não respondidos fiquem destacados mesmo após sair e voltar.
+  const [repliedTickets, setRepliedTickets] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("fenix_support_replied");
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch { return new Set<string>(); }
+  });
+
+  const persistReplied = (next: Set<string>) => {
+    setRepliedTickets(next);
+    try { localStorage.setItem("fenix_support_replied", JSON.stringify([...next] as string[])); } catch {}
+  };
+
+  // Chamados marcados manualmente como "não lida" (in-memory: UI imediata;
+  // a persistência real se dá removendo o ticket de repliedTickets acima).
   const [manuUnread, setManuUnread] = useState<Record<string, boolean>>({});
   const prevUnreadRef = useRef(0);
   // Anexos que o atendente vai enviar junto com a resposta.
@@ -206,37 +219,35 @@ export default function SupportApp() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const markSeen = (id: string) => {
-    setLastSeen((prev) => ({ ...prev, [id]: Date.now() }));
-    setManuUnread((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+  // Um ticket é considerado "não lido" (precisa de resposta) quando:
+  // 1. Foi marcado manualmente como "não lida" (manuUnread), OU
+  // 2. Tem mensagens de cliente E o suporte nunca respondeu (não está em repliedTickets), OU
+  // 3. O suporte respondeu, mas o cliente enviou nova mensagem DEPOIS da última resposta do suporte.
+  const isTicketUnread = (t: SupportTicket): boolean => {
+    if (manuUnread[t.id]) return true;
+    const msgs = t.mensagens || [];
+    if (msgs.length === 0) return false;
+    // Verificar se tem alguma mensagem de cliente
+    const hasClientMsg = msgs.some(m => m.tipo !== "suporte");
+    if (!hasClientMsg) return false;
+    // Se nunca respondemos, está não lido
+    if (!repliedTickets.has(t.id)) return true;
+    // Se respondemos: verificar se chegou nova mensagem de cliente DEPOIS da última resposta
+    const lastStaffTime = [...msgs]
+      .filter(m => m.tipo === "suporte")
+      .map(m => new Date(m.criadoEm).getTime())
+      .reduce((a, b) => Math.max(a, b), 0);
+    return msgs.some(m => m.tipo !== "suporte" && new Date(m.criadoEm).getTime() > lastStaffTime);
   };
 
-  // "Marcar como não lida": volta a última abertura para um valor mínimo para que
-  // as mensagens do cliente voltem a contar como novas (card verde + badge + toast),
-  // como se a mensagem tivesse acabado de chegar.
+  // "Marcar como não lida": remove o ticket de repliedTickets (persiste entre sessões)
+  // e seta manuUnread para feedback visual imediato.
   const markUnread = (id: string) => {
-    setLastSeen((prev) => ({ ...prev, [id]: 1 }));
     setManuUnread((prev) => ({ ...prev, [id]: true }));
+    const next = new Set<string>(repliedTickets);
+    next.delete(id);
+    persistReplied(next);
     notify("success", "Chamado marcado como não lido.");
-  };
-
-  const seedSeen = () => {
-    const now = Date.now();
-    setLastSeen((prev) => {
-      const next = { ...prev };
-      (useStore.getState().supportTickets || []).forEach((t) => {
-        if (!next[t.id]) next[t.id] = now;
-      });
-      (useStore.getState().supportLeads || []).forEach((l) => {
-        if (!next[l.id]) next[l.id] = now;
-      });
-      return next;
-    });
   };
 
   // Sincroniza o item aberto com dados recém-carregados (novas mensagens no thread).
@@ -262,7 +273,6 @@ export default function SupportApp() {
     if (loggedIn && isStaff) {
       fetchSupportInbox()
         .then(() => {
-          seedSeen();
           syncOpenItem();
         })
         .finally(() => setLoading(false));
@@ -278,7 +288,6 @@ export default function SupportApp() {
       es = new EventSource("/api/support/realtime");
       es.addEventListener("support-changed", () => {
         fetchSupportInbox().then(() => {
-          seedSeen();
           syncOpenItem();
         });
       });
@@ -295,7 +304,6 @@ export default function SupportApp() {
     if (!loggedIn || !isStaff) return;
     const id = setInterval(() => {
       fetchSupportInbox().then(() => {
-        seedSeen();
         syncOpenItem();
       });
     }, 30000);
@@ -305,7 +313,7 @@ export default function SupportApp() {
   // Refetch imediato ao voltar a aba/janela em foco.
   useEffect(() => {
     const onFocus = () => {
-      if (loggedIn && isStaff) fetchSupportInbox().then(() => { seedSeen(); syncOpenItem(); });
+      if (loggedIn && isStaff) fetchSupportInbox().then(() => { syncOpenItem(); });
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", () => {
@@ -348,7 +356,7 @@ export default function SupportApp() {
         return;
       }
       setLoading(true);
-      await fetchSupportInbox().then(() => seedSeen()).finally(() => setLoading(false));
+      await fetchSupportInbox().finally(() => setLoading(false));
     } catch {
       setLoginError("Erro de conexão. Tente novamente.");
     } finally {
@@ -390,27 +398,17 @@ export default function SupportApp() {
   };
 
   const sortedTickets = useMemo(() => {
-    const rank = (t: SupportTicket): number => {
-      // 0 = mensagem nova REAL (chegou via SSE depois da sessão); 1 = não lida
-      // marcada manualmente; 2 = lida/respondida (fica abaixo).
-      const seenAt = lastSeen[t.id] || 0;
-      const hasNewMsg = seenAt > 0 &&
-        (t.mensagens || []).some((m) => m.tipo !== "suporte" && new Date(m.criadoEm).getTime() > seenAt);
-      if (hasNewMsg && !manuUnread[t.id]) return 0;
-      if (manuUnread[t.id]) return 1;
-      return 2;
-    };
     return [...(supportTickets || [])].sort((a, b) => {
-      const ra = rank(a), rb = rank(b);
-      if (ra !== rb) return ra - rb;
-      // Mesma lógica dos cards D.I.: a mensagem mais recente fica no topo
-      // (ordem de chegada, atividade = atualizadoEm desc).
+      // Não lidos sobem ao topo; dentro do mesmo grupo, mais recente primeiro.
+      const ua = isTicketUnread(a) ? 0 : 1;
+      const ub = isTicketUnread(b) ? 0 : 1;
+      if (ua !== ub) return ua - ub;
       const da = new Date(a.atualizadoEm || a.criadoEm).getTime();
       const db = new Date(b.atualizadoEm || b.criadoEm).getTime();
       if (db !== da) return db - da;
       return new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime();
     });
-  }, [supportTickets, lastSeen, manuUnread]);
+  }, [supportTickets, repliedTickets, manuUnread]);
 
   const filteredTickets = useMemo(() => {
     return sortedTickets.filter((t) => {
@@ -444,21 +442,15 @@ export default function SupportApp() {
       });
   }, [supportLeads, search, statusFilter]);
 
-  // Avisos de mensagem nova desde a última abertura.
+  // Contador de itens não lidos/não respondidos para badges e pastas.
   const unread = useMemo(() => {
-    const leadsNew = filteredLeads.filter((l) => {
-      const seen = lastSeen[l.id] || 0;
-      return seen > 0 && new Date(l.createdAt).getTime() > seen;
-    }).length;
-    const ticketsNew = filteredTickets.filter((t) => {
-      const seen = lastSeen[t.id] || 0;
-      if (seen === 0) return false;
-      return (t.mensagens || []).some((m) => m.tipo !== "suporte" && new Date(m.criadoEm).getTime() > seen);
-    }).length;
+    // Leads "pendente" = aguardando contato → sempre destacados até ação do suporte.
+    const leadsNew = filteredLeads.filter(l => l.status === "pendente").length;
+    const ticketsNew = filteredTickets.filter(t => isTicketUnread(t)).length;
     return { leadsNew, ticketsNew, total: leadsNew + ticketsNew };
-  }, [filteredLeads, filteredTickets, lastSeen]);
+  }, [filteredLeads, filteredTickets, repliedTickets, manuUnread]);
 
-  // Toast ao receber novas mensagens durante a sessão.
+  // Toast ao receber novas mensagens (só dispara quando o total sobe de 0 para N).
   useEffect(() => {
     if (!loggedIn || !isStaff) return;
     if (unread.total > 0 && prevUnreadRef.current === 0) {
@@ -473,9 +465,10 @@ export default function SupportApp() {
     setSelectedLead(null);
     setEmail("");
     setSenha("");
-    setLastSeen({});
+    setManuUnread({});
     setLightbox(null);
     prevUnreadRef.current = 0;
+    // repliedTickets permanece no localStorage para a próxima sessão
   };
 
   const sendReply = async () => {
@@ -496,7 +489,11 @@ export default function SupportApp() {
         // Só atualiza o painel se o usuário ainda o tiver aberto — se ele
         // fechou durante o await, NÃO reabrir (corrida assíncrona).
         setSelected((cur) => (cur && cur.id === targetId ? (res.ticket || cur) : cur));
-        markSeen(targetId);
+        // Marcar como respondido — remove o destaque até nova mensagem do cliente.
+        setManuUnread(prev => { const n = { ...prev }; delete n[targetId]; return n; });
+        const nextR = new Set<string>(repliedTickets);
+        nextR.add(targetId);
+        persistReplied(nextR);
       } else {
         notify("error", res.error || "Erro ao enviar mensagem.");
       }
@@ -536,6 +533,11 @@ export default function SupportApp() {
         // fechou durante o await, NÃO reabrir (corrida assíncrona).
         setSelected((cur) => (cur && cur.id === targetId ? (res.ticket || { ...cur, status: st }) : cur));
         notify("success", msg);
+        // Ao encerrar/reabrir, marcar como respondido/tratado — remove destaque.
+        setManuUnread(prev => { const n = { ...prev }; delete n[targetId]; return n; });
+        const nextR = new Set<string>(repliedTickets);
+        nextR.add(targetId);
+        persistReplied(nextR);
       } else {
         notify("error", res.error || "Erro ao alterar status.");
       }
@@ -741,34 +743,36 @@ export default function SupportApp() {
   };
 
   const renderTicketRow = (t: SupportTicket) => {
-    const seenAt = lastSeen[t.id] || 0;
-    const newMsgs = seenAt > 0
-      ? (t.mensagens || []).filter((m) => m.tipo !== "suporte" && new Date(m.criadoEm).getTime() > seenAt).length
-      : 0;
+    const isNew = isTicketUnread(t);
     const hasAnexos = (t.mensagens || []).some((m) => (m.anexos || []).length > 0);
-    // Semântica espelhada dos cards D.I.: mensagem NOVA (não lida) do cliente →
-    // contorno verde VÍVIDO 2px + notificação; já lida → contorno branco sutil e
-    // card "apagado" (textos esmaecidos, avatar dessaturado). Interessados não mudam.
-    const isNew = newMsgs > 0;
+    // Contar mensagens de cliente não respondidas (para o badge numérico).
+    const clientMsgs = (t.mensagens || []).filter(m => m.tipo !== "suporte");
+    const lastStaffTime = [...(t.mensagens || [])]
+      .filter(m => m.tipo === "suporte")
+      .map(m => new Date(m.criadoEm).getTime())
+      .reduce((a, b) => Math.max(a, b), 0);
+    const newMsgsCount = lastStaffTime > 0
+      ? clientMsgs.filter(m => new Date(m.criadoEm).getTime() > lastStaffTime).length
+      : clientMsgs.length;
     return (
       <button
         key={t.id}
         onClick={() => {
           setSelected(t);
           setSelectedLead(null);
-          markSeen(t.id);
+          // NÃO marcar como lido ao clicar — só resposta ou encerramento remove o destaque.
         }}
         className={`w-full flex items-start gap-3 px-3.5 py-3 text-left transition-colors rounded-xl hover:bg-white/[0.03] ${
           selected?.id === t.id
             ? "bg-[#d12a62]/10 border border-[#d12a62]/25"
             : isNew
               ? "border-2 border-emerald-400/90 bg-emerald-500/[0.03]"
-              : "border border-white/30 bg-transparent"
+              : "border border-white/10 bg-transparent"
         }`}
       >
         <span className={`relative w-9 h-9 rounded-xl flex items-center justify-center text-[11px] font-black shrink-0 mt-0.5 ${avatarColorOf(t.criadoPor || t.criadoPorNome || "?")} ${isNew ? "" : "opacity-55 grayscale"}`}>
           {initialsOf(t.criadoPorNome)}
-          {newMsgs > 0 && (
+          {isNew && (
             <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#d12a62] ring-2 ring-[#151b22]" />
           )}
         </span>
@@ -777,10 +781,10 @@ export default function SupportApp() {
             <span className={`truncate ${isNew ? "font-black text-white" : "font-bold text-white/60"}`}>
               {t.criadoPorNome}
             </span>
-            {newMsgs > 0 && (
+            {isNew && (
               <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-red-500/15 border border-red-500/40 text-red-400 text-[9px] font-mono font-bold">
                 <Bell className="w-2.5 h-2.5" />
-                {newMsgs} nova{newMsgs > 1 ? "s" : ""}
+                {newMsgsCount > 0 ? `${newMsgsCount} nova${newMsgsCount > 1 ? "s" : ""}` : "Não lida"}
               </span>
             )}
             <span className={`ml-auto shrink-0 text-[10px] font-mono whitespace-nowrap ${isNew ? "text-[#8a96a3]" : "text-[#5f6a78]"}`}>{formatTime(t.atualizadoEm)}</span>
@@ -799,9 +803,9 @@ export default function SupportApp() {
   };
 
   const renderLeadRow = (l: OuvidoriaMessage) => {
-    const isNew = (lastSeen[l.id] || 0) > 0 && new Date(l.createdAt).getTime() > (lastSeen[l.id] || 0);
-    // Pendente = aguardando contato → contorno dourado no card até o atendente
-    // marcar "Já contatei" (lida) → card opaco/sem cor.
+    // Leads "pendente" = aguardando contato → card destacado com borda dourada.
+    // O status já é gerenciado pelo servidor; não precisa de lastSeen.
+    const isNew = l.status === "pendente";
     const pending = l.status === "pendente";
     const contacted = l.status === "lida";
     return (
@@ -810,7 +814,7 @@ export default function SupportApp() {
         onClick={() => {
           setSelectedLead(l);
           setSelected(null);
-          markSeen(l.id);
+          // Leads: a abertura não remove o destaque — só "Já contatei" remove.
         }}
         className={`w-full flex items-start gap-3 px-3.5 py-3 text-left transition-colors rounded-[14px] hover:bg-white/[0.03] ${
           selectedLead?.id === l.id
