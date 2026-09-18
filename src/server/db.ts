@@ -1,4 +1,4 @@
-﻿import fs from "fs";
+import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
@@ -161,6 +161,9 @@ export interface OuvidoriaMessage {
   status: "pendente" | "lida" | "resolvida" | "arquivada";
   ip?: string;
   createdAt: string;
+  contatadoEm?: string;
+  contatadoPor?: string;
+  atualizadoEm?: string;
 }
 
 export interface OuvidoriaConfig {
@@ -1873,6 +1876,10 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     return { success: true, ticket };
   }
 
+  public async clearAllSupportTickets(user: string, userToken?: string): Promise<{ success: boolean; error?: string }> {
+    return this.persistSupportTickets([], user, "SUPORTE_LIMPEZA_TESTE", "Todas as mensagens e chamados de suporte foram resetados para ambiente de testes.", userToken);
+  }
+
   public async getSupportUsers(userToken?: string): Promise<SupportUser[]> {
     const isSupabase = await this.ensureInitialized();
     const client = getSupabaseTrustedClient(userToken);
@@ -2674,7 +2681,15 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     const index = currentMessages.findIndex((m) => m.id === id);
     if (index === -1) return null;
 
+    const nowIso = new Date().toISOString();
     currentMessages[index].status = status;
+    currentMessages[index].atualizadoEm = nowIso;
+    if (status === "lida" || status === "resolvida" || status === "arquivada") {
+      if (!currentMessages[index].contatadoEm) {
+        currentMessages[index].contatadoEm = nowIso;
+        currentMessages[index].contatadoPor = user;
+      }
+    }
 
     if (isSupabase && client) {
       try {

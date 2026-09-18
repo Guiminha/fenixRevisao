@@ -64,7 +64,7 @@ import {
 } from "./src/server/backupService.js";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
-import { getSmtpStatus, sendEmail, sendTestEmail, notifyNewTicketHtml, notifyNewLeadHtml } from "./src/server/mailService.js";
+import { getSmtpStatus, sendEmail, sendTestEmail, notifyNewLeadHtml } from "./src/server/mailService.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -3024,20 +3024,6 @@ app.post("/api/support/tickets", authenticateUser, supportAnexoMulter.array("fil
       req.user?.supabaseToken
     );
     if (!result.success) return res.status(400).json({ error: result.error });
-    if (result.ticket) {
-      const cfg = await dbService.getOuvidoriaConfig();
-      if (cfg.notifySuporteEmail && cfg.emailSuporte) {
-        const t = result.ticket;
-        const primeiroTexto = (t.mensagens && t.mensagens[0]?.texto) || stripTags(texto.trim());
-        const num = String(t.numero).padStart(4, "0");
-        sendEmail({
-          to: cfg.emailSuporte,
-          subject: `Novo chamado #${num} ‐ ${t.assunto}`,
-          text: `Novo chamado de suporte aberto por ${t.criadoPorNome} (${t.criadoPor}):\nChamado #${num} ‐ ${t.assunto}\n\nMensagem inicial:\n${primeiroTexto}`,
-          html: notifyNewTicketHtml(t.assunto, primeiroTexto, t.criadoPorNome, t.criadoPor, num)
-        });
-      }
-    }
     publishSupportChange();
     res.json({ success: true, ticket: result.ticket });
   } catch (err: any) {
@@ -3088,6 +3074,7 @@ app.post("/api/support/tickets/:id/mensagens", authenticateUser, async (req: any
       req.user?.supabaseToken
     );
     if (!result.success) return res.status(400).json({ error: result.error });
+
     publishSupportChange();
     res.json({ success: true, ticket: result.ticket });
   } catch (err: any) {
@@ -3526,61 +3513,317 @@ function buildSupportTicketPdf(ticket: any): Buffer {
   return Buffer.from(doc.output("arraybuffer"));
 }
 
-// Backup do suporte: chamados fechados -> 1 PDF por chamado (nome do D.I. + código +
-// data de fechamento) -> ZIP -> pasta backup-suporte/ no Storage (organizado por data).
-// È uma CÏPIA de segurança: os chamados permanecem no banco (auditoria imutável).
-app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
+// Gera o PDF de um contato "Quero Fazer Parte"
+function buildQueroFazerPartePdf(lead: any): Buffer {
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 48;
+  const maxW = pageW - margin * 2;
+  let y = margin;
+
+  const write = (text: string, opts: { size?: number; style?: "normal" | "bold"; color?: number; gap?: number } = {}) => {
+    const size = opts.size || 10;
+    const lines = doc.splitTextToSize(text || "", maxW) as string[];
+    for (const line of lines) {
+      if (y > pageH - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setFont("helvetica", opts.style || "normal");
+      doc.setFontSize(size);
+      doc.setTextColor(opts.color ?? 40);
+      doc.text(line, margin, y);
+      y += size * 1.35;
+    }
+    if (opts.gap) y += opts.gap;
+  };
+
+  const separator = () => {
+    if (y > pageH - margin - 20) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.setDrawColor(200);
+    doc.line(margin, y, pageW - margin, y);
+    y += 18;
+  };
+
+  // Cabeçalho
+  doc.setFillColor(209, 42, 98);
+  doc.rect(0, 0, pageW, 64, "F");
+  doc.setTextColor(255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text("GRUPO FENIX - QUERO FAZER PARTE DA EQUIPE", margin, 30);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  const statusLabel = lead.status === "pendente" ? "Pendente (Aguardando contato)" : "Ja contatado";
+  doc.text(`Candidatura para Trabalhar na Equipe - Status: ${statusLabel}`, margin, 48);
+  y = 96;
+
+  write(`Candidato: ${lead.nome || ""}`, { size: 12, style: "bold" });
+  write(`E-mail: ${lead.email || "-"}`, { size: 11 });
+  write(`WhatsApp / Telefone: ${lead.telefone || "-"}`, { size: 11 });
+  const localizacao = [lead.cidade, lead.estado, lead.pais].filter(Boolean).join(" / ");
+  if (localizacao) {
+    write(`Localização: ${localizacao}`, { size: 10 });
+  }
+  write("Objetivo: Trabalhar na equipe do Grupo Fenix", { size: 10 });
+  write(`Recebido em: ${lead.createdAt ? new Date(lead.createdAt).toLocaleString("pt-BR") : "-"}`, { size: 10 });
+  if (lead.contatadoEm) {
+    write(`Contatado em: ${new Date(lead.contatadoEm).toLocaleString("pt-BR")}`, { size: 10 });
+    write(`Contatado por: ${lead.contatadoPor || "-"}`, { size: 10 });
+  }
+  separator();
+
+  write("MENSAGEM / APRESENTAÇÃO DO CANDIDATO", { size: 11, style: "bold", gap: 6 });
+  write(lead.mensagem || "(sem mensagem adicional)", { size: 10, gap: 10 });
+
+  return Buffer.from(doc.output("arraybuffer"));
+}
+
+function getBrasiliaDateStr(d = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+
+function getBrasiliaTimeStr(d = new Date()): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(d);
+}
+
+let ultimoDiaBackupSuporte: string | null = null;
+let backupSuporteEmAndamento = false;
+
+// Rotina oficial de backup do suporte e interessados "Quero Fazer Parte":
+// 1. Chamados de suporte: abertos entram todo dia. No dia em que for fechado, entra com '_ENCERRADO_{data}'.
+//    A partir do dia seguinte ao fechamento, não entra mais no backup.
+// 2. Pedidos "Quero Fazer Parte": pendentes entram todo dia. No dia em que clicar em "Já contatei", entra com '_CONTATADO_{data}'.
+//    A partir do dia seguinte ao contato, não entra mais no backup.
+// Salva individualmente em PDF na pasta do dia do Supabase Storage: backup-suporte/AAAA-MM-DD/
+// Gera também um .zip consolidado com todos os PDFs para download rápido.
+async function executarBackupSuporteDiario(opts: { manual?: boolean; adminRef?: string; userToken?: string } = {}): Promise<{
+  success: boolean;
+  total: number;
+  ticketsAbertos: number;
+  ticketsFechadosHoje: number;
+  leadsPendentes: number;
+  leadsContatadosHoje: number;
+  pasta: string;
+  dataHoje: string;
+  arquivoZip?: string;
+  relZip?: string;
+  tamanhoZipKb?: number;
+}> {
+  if (backupSuporteEmAndamento) {
+    throw new Error("Backup do suporte já está em andamento.");
+  }
+  backupSuporteEmAndamento = true;
   try {
-    const tickets = await dbService.getSupportTickets(req.user?.supabaseToken);
-    const fechados = tickets.filter((t) => t.status === "fechado");
-    if (fechados.length === 0) {
-      return res.status(400).json({ error: "Nenhum chamado fechado para exportar. Feche um chamado para gerar o backup." });
+    const hoje = getBrasiliaDateStr();
+    const [tickets, allLeads] = await Promise.all([
+      dbService.getSupportTickets(opts.userToken),
+      dbService.getOuvidoriaMessages(undefined, undefined, undefined, opts.userToken)
+    ]);
+    const leads = (allLeads || []).filter((l) => l.tipo === "parceria");
+
+    const incluidos: { tipo: "ticket" | "lead"; data: any; filename: string }[] = [];
+    let countTicketsAbertos = 0;
+    let countTicketsFechadosHoje = 0;
+    let countLeadsPendentes = 0;
+    let countLeadsContatadosHoje = 0;
+
+    // 1. Chamados de Suporte
+    for (const t of tickets) {
+      const cod = sanitizeFilePart(t.criadoPor || "DI");
+      const nome = sanitizeFilePart(t.criadoPorNome || "SemNome");
+      const dataAbertura = t.criadoEm ? getBrasiliaDateStr(new Date(t.criadoEm)) : hoje;
+      const numStr = t.numero ? `chamado-${String(t.numero).padStart(4, "0")}_` : "";
+
+      if (t.status === "fechado") {
+        const fechadoData = t.fechadoEm
+          ? getBrasiliaDateStr(new Date(t.fechadoEm))
+          : (t.atualizadoEm ? getBrasiliaDateStr(new Date(t.atualizadoEm)) : hoje);
+
+        // Se fechou HOJE: inclui no backup de hoje com sufixo ENCERRADO
+        // Se fechou em dia anterior: a partir do dia seguinte NÃO entra mais no backup
+        if (fechadoData === hoje) {
+          countTicketsFechadosHoje++;
+          const filename = `DI_${cod}_${nome}_${numStr}aberto_${dataAbertura}_ENCERRADO_${fechadoData}.pdf`;
+          incluidos.push({ tipo: "ticket", data: t, filename });
+        }
+      } else {
+        // Chamado em aberto/andamento: entra todo dia no backup
+        countTicketsAbertos++;
+        const filename = `DI_${cod}_${nome}_${numStr}aberto_${dataAbertura}.pdf`;
+        incluidos.push({ tipo: "ticket", data: t, filename });
+      }
     }
 
-    const zip = new JSZip();
-    for (const ticket of fechados) {
-      const nome = sanitizeFilePart(ticket.criadoPorNome || "DI");
-      const codigo = sanitizeFilePart(ticket.criadoPor || "");
-      const dataFechamento = formatDatePart(ticket.fechadoEm || ticket.atualizadoEm);
-      zip.file(`${nome}_${codigo}_${dataFechamento}.pdf`, buildSupportTicketPdf(ticket));
+    // 2. Pedidos "Quero Fazer Parte"
+    for (const l of leads) {
+      const nome = sanitizeFilePart(l.nome || "Interessado");
+      const idRef = sanitizeFilePart(l.telefone || l.email || l.id.slice(-6));
+      const dataAbertura = l.createdAt ? getBrasiliaDateStr(new Date(l.createdAt)) : hoje;
+
+      if (l.status === "pendente") {
+        // Pendente (ainda não contatado): entra todo dia no backup
+        countLeadsPendentes++;
+        const filename = `FazerParte_${nome}_${idRef}_aberto_${dataAbertura}.pdf`;
+        incluidos.push({ tipo: "lead", data: l, filename });
+      } else {
+        // Marcado como "Já contatei" (lida, resolvida ou arquivada)
+        const contatadoData = l.contatadoEm
+          ? getBrasiliaDateStr(new Date(l.contatadoEm))
+          : (l.atualizadoEm ? getBrasiliaDateStr(new Date(l.atualizadoEm)) : hoje);
+
+        // Se foi contatado HOJE: inclui no backup de hoje com sufixo CONTATADO
+        // Se foi contatado em dia anterior: a partir do dia seguinte NÃO entra mais no backup
+        if (contatadoData === hoje) {
+          countLeadsContatadosHoje++;
+          const filename = `FazerParte_${nome}_${idRef}_aberto_${dataAbertura}_CONTATADO_${contatadoData}.pdf`;
+          incluidos.push({ tipo: "lead", data: l, filename });
+        }
+      }
     }
 
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const dataPart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const dataPath = `${now.getFullYear()}/${dataPart}`;
-    const zipName = `backup-suporte_${dataPart}_${pad(now.getHours())}h${pad(now.getMinutes())}.zip`;
-    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    if (incluidos.length === 0) {
+      return {
+        success: true,
+        total: 0,
+        ticketsAbertos: 0,
+        ticketsFechadosHoje: 0,
+        leadsPendentes: 0,
+        leadsContatadosHoje: 0,
+        pasta: `backup-suporte/${hoje}/`,
+        dataHoje: hoje
+      };
+    }
 
     const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
     if (!bucketStatus.ready) {
-      return res.status(500).json({ error: "Bucket do Supabase Storage não está disponível para o backup." });
+      throw new Error("Bucket do Supabase Storage não está disponível para o backup.");
     }
 
-    const objectKey = `backup-suporte/${dataPath}/${zipName}`;
     const client = getActiveStorageClient();
-    await client.putObject(STORAGE_BUCKET, objectKey, zipBuffer, zipBuffer.length, {
+    const zip = new JSZip();
+
+    // Salva cada PDF individualmente no Storage dentro da pasta da data
+    for (const item of incluidos) {
+      const pdfBuffer = item.tipo === "ticket"
+        ? buildSupportTicketPdf(item.data)
+        : buildQueroFazerPartePdf(item.data);
+      const objectKey = `backup-suporte/${hoje}/${item.filename}`;
+      await client.putObject(STORAGE_BUCKET, objectKey, pdfBuffer, pdfBuffer.length, {
+        "Content-Type": "application/pdf"
+      });
+      zip.file(item.filename, pdfBuffer);
+    }
+
+    // Gera o ZIP consolidado na pasta para permitir download
+    const zipName = `backup-suporte_${hoje}.zip`;
+    const zipKey = `backup-suporte/${hoje}/${zipName}`;
+    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    await client.putObject(STORAGE_BUCKET, zipKey, zipBuffer, zipBuffer.length, {
       "Content-Type": "application/zip"
     });
 
+    const admin = opts.adminRef || (opts.manual ? "admin-manual" : "sistema-cron-22h");
+    const detalhesLog = `Backup de suporte (${opts.manual ? "manual" : "automático 22h"}): ${incluidos.length} item(ns) [Suporte: ${countTicketsAbertos} abertos, ${countTicketsFechadosHoje} encerrados hoje | Fazer Parte: ${countLeadsPendentes} pendentes, ${countLeadsContatadosHoje} contatados hoje] salvos em ${STORAGE_BUCKET}/backup-suporte/${hoje}/`;
+
     dbService.recordAuditLog(
-      req.user?.code || "admin",
+      admin,
       "SUPORTE_BACKUP",
-      `Backup de suporte gerado: ${fechados.length} chamado(s) fechado(s) em ${objectKey}`
+      detalhesLog
     ).catch(() => {});
+
+    ultimoDiaBackupSuporte = hoje;
+
+    return {
+      success: true,
+      total: incluidos.length,
+      ticketsAbertos: countTicketsAbertos,
+      ticketsFechadosHoje: countTicketsFechadosHoje,
+      leadsPendentes: countLeadsPendentes,
+      leadsContatadosHoje: countLeadsContatadosHoje,
+      pasta: `backup-suporte/${hoje}/`,
+      dataHoje: hoje,
+      arquivoZip: zipKey,
+      relZip: zipKey.replace("backup-suporte/", ""),
+      tamanhoZipKb: Math.round(zipBuffer.length / 1024)
+    };
+  } finally {
+    backupSuporteEmAndamento = false;
+  }
+}
+
+// Agendador diário do backup do suporte: roda às 22:00 (Brasília)
+async function verificarAgendadorBackupSuporte(): Promise<void> {
+  const agoraHora = getBrasiliaTimeStr();
+  if (agoraHora !== "22:00") return;
+
+  const hoje = getBrasiliaDateStr();
+  if (ultimoDiaBackupSuporte === hoje) return;
+
+  ultimoDiaBackupSuporte = hoje;
+  console.log(`[Backup Suporte] Disparando backup automático diário das 22:00 (${hoje})...`);
+  try {
+    const res = await executarBackupSuporteDiario({ adminRef: "sistema-cron-22h" });
+    console.log(`[Backup Suporte] Backup concluído às 22:00: ${res.total} chamado(s) arquivado(s) em ${res.pasta}`);
+  } catch (err: any) {
+    console.error(`[Backup Suporte] Falha no backup automático das 22:00:`, err?.message || err);
+  }
+}
+
+// Rota para disparo manual pelo painel admin (botão "Fazer Backup")
+app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
+  try {
+    const resultado = await executarBackupSuporteDiario({
+      manual: true,
+      adminRef: req.user?.code || "admin",
+      userToken: req.user?.supabaseToken
+    });
+
+    if (resultado.total === 0) {
+      return res.status(400).json({
+        error: "Nenhum chamado de suporte ou pedido para fazer parte pendente/concluído hoje para exportar."
+      });
+    }
 
     res.json({
       success: true,
-      count: fechados.length,
-      arquivo: objectKey,
-      // Download agora passa pela rota admin (/api/admin/backup/suporte-download/*).
-      // A URL pública /api/storage/stream é bloqueada por isBackupFamilyKey.
-      rel: objectKey.replace("backup-suporte/", ""),
-      tamanhoKb: Math.round(zipBuffer.length / 1024)
+      count: resultado.total,
+      ticketsAbertos: resultado.ticketsAbertos,
+      ticketsFechadosHoje: resultado.ticketsFechadosHoje,
+      leadsPendentes: resultado.leadsPendentes,
+      leadsContatadosHoje: resultado.leadsContatadosHoje,
+      pasta: resultado.pasta,
+      arquivo: resultado.arquivoZip,
+      rel: resultado.relZip,
+      tamanhoKb: resultado.tamanhoZipKb
     });
   } catch (err: any) {
     console.error("[Backup Suporte] Erro:", err);
-    res.status(500).json({ error: "Erro ao gerar o backup do suporte." });
+    res.status(500).json({ error: err?.message || "Erro ao gerar o backup do suporte." });
+  }
+});
+
+// Limpeza de todos os chamados de suporte (para testes do zero)
+app.post("/api/admin/support/clear-all", requireAdmin, async (req: any, res) => {
+  try {
+    const limpo = await dbService.clearAllSupportTickets(req.user?.code || "admin", req.user?.supabaseToken);
+    if (!limpo.success) {
+      return res.status(500).json({ error: limpo.error });
+    }
+    publishSupportChange();
+    res.json({ success: true, message: "Todas as mensagens de suporte foram limpas com sucesso." });
+  } catch (err: any) {
+    console.error("[Limpeza Suporte] Erro:", err);
+    res.status(500).json({ error: "Erro ao limpar chamados de suporte." });
   }
 });
 
@@ -4894,13 +5137,16 @@ const server = app.listen(PORT, "::", () => {
     console.log(`Server successfully started on http://0.0.0.0:${PORT}`);
   });
 
-  // Agendador diário da API Nipponflex: roda às 02:30 (horário de Brasília).
-  // Carrega o último estado (sobrevive a restart) e checa a cada 60s.
+  // Agendadores diários:
+  // 1. API Nipponflex: roda às 02:30 (horário de Brasília).
+  // 2. Backup do Suporte: roda às 22:00 (horário de Brasília).
   carregarEstadoInicial().then(() => {
-    verificarAgendador(); // se por acaso já for a hora logo após subir
+    verificarAgendador();
+    verificarAgendadorBackupSuporte();
   });
   setInterval(() => {
     verificarAgendador().catch((e) => console.error("[Nipponflex] erro no agendador:", e));
+    verificarAgendadorBackupSuporte().catch((e) => console.error("[Suporte Backup] erro no agendador:", e));
   }, 60_000);
 
   // Request timeout unlimited (large uploads), but keep-alive com teto contra

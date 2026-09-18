@@ -26,6 +26,10 @@ Atualizado: 17/09/2026.
 - **storageService.ts** substitui minioService.ts; rotas `/api/storage/*`; sem MinIO e sem fallback em disco em todo o projeto
 - **Login D.I.** aceita 4-6 dígitos (LoginModal.tsx)
 - **obterMetricasDis()** = 6 queries `count: "exact"` + card "Outros"
+- **Backup Integral do Suporte + Quero Fazer Parte da Equipe:** Salva PDFs individuais em `backup-suporte/AAAA-MM-DD/` com ZIP consolidado; agendamento automático às 22:00 e disparo manual; inclui chamados em andamento e candidaturas pendentes; após encerramento/contato, gera o backup do dia e não entra mais nos dias seguintes
+- **Quero Fazer Parte da Equipe:** Conceito unificado em todo o sistema (candidatura para trabalhar na equipe do Grupo Fênix, não parceria); modal e Central de Suporte com ícone Briefcase e textos adequados
+- **Remoção de E-mails do Suporte:** Módulo de suporte opera 100% dentro do sistema; card de e-mail removido da aba Suporte no Admin
+- **Ambiente de Testes Limpo:** Chamados de suporte e candidaturas Quero Fazer Parte resetados (0 chamados, 0 leads) a pedido do usuário
 
 ### Pendente / próximo
 - **"Resumo do último relatório"** (AdminView ~2756-2780, `<details>` após botão SINCRONIZAR): usuário quer que mostre **o que mudou de uma sync para outra** — novos cadastrados + mudanças de situação (ex.: ativo → inativo), não só contagem. Dados já existem: `NfRelatorio.situacoesAlteradas[]` {codigo, nome, anterior, nova} e `estado.novosCadastrados`

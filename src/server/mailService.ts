@@ -123,6 +123,18 @@ export function notifyNewTicketHtml(assunto: string, texto: string, criadoPorNom
   );
 }
 
+// Notificação de nova mensagem recebida em chamado de suporte existente.
+export function notifyNewMessageHtml(ticketAssunto: string, mensagemTexto: string, autorNome: string, autorRef: string, numero: string): string {
+  const h = escapeHtml;
+  return wrapShell(
+    `Nova mensagem no chamado #${h(numero)} — ${h(ticketAssunto)}`,
+    `<p style="color:#94a3b8;font-size:13px;margin:0 0 16px;">${h(autorNome)} (<strong style="color:#d12a62;">${h(autorRef)}</strong>) enviou uma nova resposta no suporte.</p>` +
+    fieldBlock("Chamado", `#${h(numero)} — ${h(ticketAssunto)}`) +
+    fieldBlock("Mensagem recebida", h(mensagemTexto)),
+    "Responda diretamente pelo painel de suporte — as mensagens aos D.I.s são gerenciadas dentro da plataforma."
+  );
+}
+
 // Novo interessado "Quero Fazer Parte" (contato é fora do sistema — WhatsApp em destaque).
 export function notifyNewLeadHtml(lead: {
   nome: string; email: string; telefone?: string; cidade?: string; estado?: string; pais?: string;

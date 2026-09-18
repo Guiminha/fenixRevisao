@@ -225,6 +225,9 @@ export interface OuvidoriaMessage {
   status: "pendente" | "lida" | "resolvida" | "arquivada";
   ip?: string;
   createdAt: string;
+  contatadoEm?: string;
+  contatadoPor?: string;
+  atualizadoEm?: string;
 }
 
 export interface OuvidoriaConfig {

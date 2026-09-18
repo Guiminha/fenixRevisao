@@ -9,7 +9,7 @@ import {
   Search,
   Lock,
   Inbox,
-  Handshake,
+  Briefcase,
   Phone,
   Mail,
   MapPin,
@@ -857,7 +857,7 @@ export default function SupportApp() {
             <span className={`ml-auto shrink-0 text-[10px] font-mono whitespace-nowrap ${contacted ? "text-[#5f6a78]" : "text-[#8a96a3]"}`}>{formatTime(l.createdAt)}</span>
           </div>
           <p className={`truncate text-[12px] mt-0.5 ${isNew ? "text-white font-bold" : contacted ? "text-[#5f6a78]" : "text-[#8a96a3]"}`}>
-            {l.tipoParceria || "Quero Fazer Parte"}
+            {l.tipoParceria || "Trabalhar na Equipe do Grupo Fênix"}
           </p>
           <p className={`truncate text-[11px] mt-0.5 ${contacted ? "text-[#5f6a78]" : "text-[#8a96a3]"}`}>
             {l.telefone ? <span className={`font-mono ${pending ? "text-amber-300/90" : ""}`}>{l.telefone}</span> : null}
@@ -1102,7 +1102,7 @@ export default function SupportApp() {
               </span>
             </div>
             <p className="text-[10px] text-[#8a96a3] mt-0.5 truncate">
-              {selectedLead.tipoParceria || "Quero Fazer Parte"} · Recebido em {formatDate(selectedLead.createdAt)}
+              {selectedLead.tipoParceria || "Trabalhar na Equipe do Grupo Fênix"} · Recebido em {formatDate(selectedLead.createdAt)}
             </p>
           </div>
         </div>
@@ -1129,7 +1129,7 @@ export default function SupportApp() {
                   Copiar
                 </button>
                 <a
-                  href={`https://wa.me/${whatsappDigits(selectedLead.telefone || "")}?text=${encodeURIComponent("Olá! Aqui é do Grupo Fênix. Recebemos sua solicitação para fazer parte do Grupo Fênix.")}`}
+                  href={`https://wa.me/${whatsappDigits(selectedLead.telefone || "")}?text=${encodeURIComponent("Olá! Aqui é do Grupo Fênix. Recebemos sua solicitação para trabalhar na equipe do Grupo Fênix.")}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500 text-black text-[11px] font-black hover:brightness-110 transition-all"
@@ -1358,15 +1358,15 @@ export default function SupportApp() {
                   filteredLeads.length === 0 ? (
                     statusFilter !== "arquivados" && (
                       <div className="p-6 text-center space-y-2">
-                        <Handshake className="w-7 h-7 mx-auto text-[#8a96a3]/40" />
-                        <p className="text-[11px] text-[#8a96a3]">Nenhum interessado para exibir neste filtro.</p>
+                        <Briefcase className="w-7 h-7 mx-auto text-[#8a96a3]/40" />
+                        <p className="text-[11px] text-[#8a96a3]">Nenhum candidato para exibir neste filtro.</p>
                       </div>
                     )
                   ) : (
                     <div className="rounded-xl border border-brand-gold/20 bg-brand-gold/[0.03] overflow-hidden">
                       <div className="sticky top-0 z-10 bg-[#151b22]/95 backdrop-blur px-3.5 py-2 text-[9px] font-mono font-bold uppercase tracking-wider text-gold-metallic flex items-center gap-1.5 border-b border-brand-gold/15">
-                        <Handshake className="w-3 h-3" />
-                        Interessados — Quero Fazer Parte
+                        <Briefcase className="w-3 h-3" />
+                        Candidaturas — Quero Fazer Parte da Equipe
                         {unread.leadsNew > 0 && (
                           <span className="px-1.5 py-0.5 rounded-md bg-red-500 text-white text-[9px] font-bold">
                             {unread.leadsNew}

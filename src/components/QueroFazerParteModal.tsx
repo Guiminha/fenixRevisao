@@ -25,9 +25,9 @@ interface QueroFazerParteModalProps {
 export default function QueroFazerParteModal({ 
   isOpen, 
   onClose,
-  title = "Quero Fazer Parte do Grupo Fênix",
-  subtitle = "Preencha seus dados de contato e localização para fazer parte da nossa comunidade.",
-  tipoParceria = "Quero Fazer Parte"
+  title = "Quero Fazer Parte da Equipe do Grupo Fênix",
+  subtitle = "Preencha seus dados de contato e localização para trabalhar na equipe do Grupo Fênix.",
+  tipoParceria = "Trabalhar na Equipe do Grupo Fênix"
 }: QueroFazerParteModalProps) {
   const [parcNome, setParcNome] = useState("");
   const [parcEmail, setParcEmail] = useState("");
@@ -312,7 +312,7 @@ export default function QueroFazerParteModal({
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-[#cbd5e1] flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 text-[#d12a62]" />
-                Por que você quer fazer parte? <span className="text-red-400">*</span>
+                Por que você quer trabalhar na equipe do Grupo Fênix? <span className="text-red-400">*</span>
               </label>
               <span className={`text-[10px] font-mono ${parcMensagem.length > 3000 ? "text-red-400 font-bold" : "text-[#64748b]"}`}>
                 {parcMensagem.length} / 3000
@@ -321,7 +321,7 @@ export default function QueroFazerParteModal({
             <textarea
               required
               rows={4}
-              placeholder="Conte-nos um pouco sobre você, seus objetivos e por que gostaria de fazer parte do Grupo Fênix..."
+              placeholder="Conte-nos um pouco sobre você, sua experiência e por que gostaria de trabalhar na equipe do Grupo Fênix..."
               value={parcMensagem}
               onChange={(e) => setParcMensagem(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-lg bg-white/5 border border-white/10 text-white placeholder-[#64748b] text-xs focus:outline-none focus:border-[#d12a62] transition-colors resize-y min-h-[100px]"
@@ -350,7 +350,7 @@ export default function QueroFazerParteModal({
               ) : (
                 <>
                   <Send className="w-4 h-4" />
-                  Enviar Solicitação - Quero Fazer Parte
+                  Enviar Candidatura — Quero Fazer Parte
                 </>
               )}
             </button>

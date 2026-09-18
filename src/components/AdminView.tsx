@@ -696,99 +696,6 @@ export default function AdminView() {
     title: string;
   } | null>(null);
 
-  // --- NOTIFICAÇÕES POR E-MAIL (aba Suporte) STATES ---
-  const [editConfigEmailSup, setEditConfigEmailSup] = useState("ouvidoria@grupofenix.com");
-  const [editConfigEmailParc, setEditConfigEmailParc] = useState("parcerias@grupofenix.com");
-  const [notifySuporteToggle, setNotifySuporteToggle] = useState(false);
-  const [notifyParceriaToggle, setNotifyParceriaToggle] = useState(false);
-  const [emailSmtpStatus, setEmailSmtpStatus] = useState<{ configured: boolean; host: string; port: number; secure: boolean; user: string } | null>(null);
-  const [emailConfigLoading, setEmailConfigLoading] = useState(false);
-  const [emailConfigSaving, setEmailConfigSaving] = useState(false);
-  const [emailTestLoading, setEmailTestLoading] = useState(false);
-  const [emailTestResult, setEmailTestResult] = useState<{ tipo: "success" | "error"; texto: string } | null>(null);
-
-  const fetchSupportEmailConfig = async () => {
-    setEmailConfigLoading(true);
-    try {
-      const res = await fetch("/api/admin/support/email-config", {
-        headers: { Authorization: `Bearer ${token || localStorage.getItem("fenix_token") || ""}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setEditConfigEmailSup(data.config?.emailSuporte || "ouvidoria@grupofenix.com");
-        setEditConfigEmailParc(data.config?.emailParcerias || "parcerias@grupofenix.com");
-        setNotifySuporteToggle(!!data.config?.notifySuporteEmail);
-        setNotifyParceriaToggle(!!data.config?.notifyParceriaEmail);
-        setEmailSmtpStatus(data.smtp || null);
-      }
-    } catch (err) {
-      console.error("Erro ao buscar configurações de e-mail:", err);
-    } finally {
-      setEmailConfigLoading(false);
-    }
-  };
-
-  const handleSaveSupportEmailConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setEmailConfigSaving(true);
-    try {
-      const res = await fetch("/api/admin/support/email-config", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token || localStorage.getItem("fenix_token") || ""}`
-        },
-        body: JSON.stringify({
-          emailSuporte: editConfigEmailSup,
-          emailParcerias: editConfigEmailParc,
-          notifySuporteEmail: notifySuporteToggle,
-          notifyParceriaEmail: notifyParceriaToggle
-        })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setEditConfigEmailSup(data.config.emailSuporte);
-        setEditConfigEmailParc(data.config.emailParcerias);
-        setNotifySuporteToggle(!!data.config.notifySuporteEmail);
-        setNotifyParceriaToggle(!!data.config.notifyParceriaEmail);
-        setEmailSmtpStatus(data.smtp || null);
-        triggerNotification("success", "Configurações de e-mail salvas com sucesso!");
-      } else {
-        triggerNotification("error", data.error || "Erro ao salvar configurações.");
-      }
-    } catch (err) {
-      triggerNotification("error", "Erro de conexão ao salvar configurações.");
-    } finally {
-      setEmailConfigSaving(false);
-    }
-  };
-
-  const handleTestSupportEmail = async () => {
-    setEmailTestLoading(true);
-    setEmailTestResult(null);
-    try {
-      const res = await fetch("/api/admin/support/email-test", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token || localStorage.getItem("fenix_token") || ""}`
-        },
-        body: JSON.stringify({ to: editConfigEmailSup })
-      });
-      const data = await res.json();
-      setEmailTestResult({
-        tipo: res.ok && data.success ? "success" : "error",
-        texto: res.ok && data.success
-          ? (data.message || "E-mail de teste enviado com sucesso.")
-          : "Falha ao enviar o e-mail de teste. Verifique as configurações SMTP."
-      });
-    } catch (err) {
-      setEmailTestResult({ tipo: "error", texto: "Erro de conexão ao testar e-mail." });
-    } finally {
-      setEmailTestLoading(false);
-    }
-  };
-
   // Banner Form States
   const [editingBanner, setEditingBanner] = useState<Banner | null>(null);
   const [bannerTitulo, setBannerTitulo] = useState("");
@@ -832,7 +739,15 @@ export default function AdminView() {
   const [resetSupLoading, setResetSupLoading] = useState(false);
   const [resetSupError, setResetSupError] = useState<string | null>(null);
   const [supBackupLoading, setSupBackupLoading] = useState(false);
-  const [supBackupResult, setSupBackupResult] = useState<{ count: number; rel: string; arquivo: string; tamanhoKb: number } | null>(null);
+  const [supBackupResult, setSupBackupResult] = useState<{
+    count: number;
+    abertos?: number;
+    fechadosHoje?: number;
+    pasta?: string;
+    rel?: string;
+    arquivo?: string;
+    tamanhoKb?: number;
+  } | null>(null);
 
   // --- BACKUP & RESTAURAÇÃO DO SITE ---
   const [bakCreating, setBakCreating] = useState(false);
@@ -1202,8 +1117,16 @@ export default function AdminView() {
         triggerNotification("error", data.error || "Erro ao gerar o backup.");
         return;
       }
-      setSupBackupResult({ count: data.count, rel: data.rel, arquivo: data.arquivo, tamanhoKb: data.tamanhoKb });
-      triggerNotification("success", `Backup gerado: ${data.count} chamado(s) fechado(s).`);
+      setSupBackupResult({
+        count: data.count,
+        abertos: data.abertos,
+        fechadosHoje: data.fechadosHoje,
+        pasta: data.pasta,
+        rel: data.rel,
+        arquivo: data.arquivo,
+        tamanhoKb: data.tamanhoKb
+      });
+      triggerNotification("success", `Backup gerado: ${data.count} chamado(s) salvo(s) no Storage.`);
     } catch (err) {
       triggerNotification("error", "Erro de conexão ao gerar o backup.");
     } finally {
@@ -1345,7 +1268,6 @@ export default function AdminView() {
       fetchAdminDiCodes();
     } else if (activeTab === "suporte") {
       fetchSupportUsers();
-      fetchSupportEmailConfig();
     } else if (activeTab === "backup") {
       fetchBackupList();
       fetchBackupStatus();
@@ -3165,7 +3087,7 @@ export default function AdminView() {
           </div>
         </div>
 
-        {/* Backup do Suporte (PDF/ZIP -> Storage) */}
+        {/* Backup do Suporte (PDFs individuais por data -> Storage) */}
         <div className="bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-start gap-3">
@@ -3173,11 +3095,14 @@ export default function AdminView() {
                 <Download className="w-5 h-5 text-[#d12a62]" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Backup do Suporte</h3>
-                <p className="text-[11px] text-[#8a96a3] max-w-xl">
-                  Gera um PDF por chamado fechado (arquivo com o nome do D.I., código e data de fechamento),
-                  compacta todos em um .zip e salva na pasta <span className="font-mono text-white">backup-suporte/</span> do Supabase Storage,
-                  organizado por data. Os chamados permanecem no banco — o backup é uma cópia de segurança.
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Backup do Suporte</h3>
+                  <span className="text-[10px] font-mono font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded">
+                    Automático Diário às 22:00
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#8a96a3] max-w-2xl mt-1 leading-relaxed">
+                  O sistema salva individualmente em PDF <strong className="text-white">todas as conversas do suporte e candidaturas "Quero Fazer Parte da Equipe"</strong> na pasta <span className="font-mono text-white">backup-suporte/AAAA-MM-DD/</span> do Supabase Storage. Chamados em andamento e interessados pendentes entram todos os dias. Ao serem encerrados ou contatados, entram no dia com o sufixo correspondente e não entram mais nos dias seguintes. O processo roda automaticamente às <strong className="text-white">22:00 (Brasília)</strong> e também pode ser executado manualmente abaixo.
                 </p>
               </div>
             </div>
@@ -3189,12 +3114,12 @@ export default function AdminView() {
               {supBackupLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Gerando...
+                  Executando...
                 </>
               ) : (
                 <>
                   <Download className="w-4 h-4" />
-                  Fazer Backup (PDF/ZIP)
+                  Fazer Backup Manual
                 </>
               )}
             </button>
@@ -3202,173 +3127,29 @@ export default function AdminView() {
           {supBackupResult && (
             <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2">
               <p className="text-sm font-bold text-emerald-400">
-                {supBackupResult.count} chamado(s) fechado(s) exportado(s).
+                {supBackupResult.count} arquivo(s) em PDF salvo(s) individualmente no Supabase Storage.
               </p>
-              <p className="text-[11px] text-[#8a96a3] font-mono break-all">
-                {supBackupResult.arquivo} ({supBackupResult.tamanhoKb} KB)
-              </p>
-              <button
-                onClick={handleSupBackupDownload}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold hover:bg-emerald-500/30 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Baixar ZIP
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Notificações por E-mail (destinos + toggles + status SMTP) */}
-        <div className="bg-[#151b22]/60 border border-white/5 rounded-3xl p-6 md:p-8 shadow-xl space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-[#d12a62]/15 border border-[#d12a62]/30 flex items-center justify-center shrink-0">
-                <Mail className="w-5 h-5 text-[#d12a62]" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-display">Notificações por E-mail</h3>
-                <p className="text-[11px] text-[#8a96a3] max-w-2xl leading-relaxed">
-                  Notifica a equipe quando um membro abre um chamado ou um interessado envia "Quero Fazer Parte".
-                  O envio é uma <strong className="text-white">notificação inicial</strong> — o atendimento acontece dentro do
-                  sistema (suporte) ou pelo WhatsApp/e-mail (interessados). Se o SMTP não estiver configurado, nada é enviado
-                  e o formulário continua funcionando normalmente.
+              <div className="text-xs text-[#c9d2dc] space-y-0.5">
+                <p>
+                  <strong className="text-white">Suporte:</strong> {supBackupResult.ticketsAbertos ?? supBackupResult.abertos ?? 0} em andamento &bull; {supBackupResult.ticketsFechadosHoje ?? supBackupResult.fechadosHoje ?? 0} encerrado(s) hoje.
+                </p>
+                <p>
+                  <strong className="text-white">Quero Fazer Parte (Equipe):</strong> {supBackupResult.leadsPendentes ?? 0} pendente(s) &bull; {supBackupResult.leadsContatadosHoje ?? 0} contatado(s) hoje.
                 </p>
               </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span
-                className={`px-3 py-1.5 rounded-lg border text-[10px] font-mono font-bold flex items-center gap-1.5 ${
-                  emailSmtpStatus?.configured
-                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                    : "bg-amber-500/10 text-amber-400 border-amber-500/30"
-                }`}
-              >
-                {emailSmtpStatus?.configured ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    SMTP ativo ({emailSmtpStatus.host}:{emailSmtpStatus.port})
-                  </>
-                ) : (
-                  <>
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    SMTP não configurado
-                  </>
-                )}
-              </span>
-            </div>
-          </div>
-
-          {emailConfigLoading ? (
-            <div className="py-8 text-center text-xs text-[#8a96a3]">Carregando configurações de e-mail...</div>
-          ) : (
-            <form onSubmit={handleSaveSupportEmailConfig} className="space-y-5">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-[#e8edf2] uppercase tracking-wider font-display">
-                    Destino — Chamados de Suporte (D.I.)
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={editConfigEmailSup}
-                    onChange={(e) => setEditConfigEmailSup(e.target.value)}
-                    placeholder="suporte@grupofenix.com"
-                    className="w-full bg-[#0b0f14] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-[#8a96a3]/50 focus:outline-none focus:border-[#d12a62] transition-colors"
-                  />
-                  <p className="text-[10px] text-[#8a96a3]">Recebe a notificação quando um membro abre um novo chamado.</p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-bold text-[#e8edf2] uppercase tracking-wider font-display">
-                    Destino — Interessados "Quero Fazer Parte"
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={editConfigEmailParc}
-                    onChange={(e) => setEditConfigEmailParc(e.target.value)}
-                    placeholder="parcerias@grupofenix.com"
-                    className="w-full bg-[#0b0f14] border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-[#8a96a3]/50 focus:outline-none focus:border-[#d12a62] transition-colors"
-                  />
-                  <p className="text-[10px] text-[#8a96a3]">Recebe a notificação quando um interessado envia o formulário "Quero Fazer Parte".</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <p className="text-[11px] text-[#8a96a3] font-mono break-all">
+                Pasta: {supBackupResult.pasta || supBackupResult.arquivo} {supBackupResult.tamanhoKb ? `(${supBackupResult.tamanhoKb} KB zip consolidado)` : ""}
+              </p>
+              {supBackupResult.rel && (
                 <button
-                  type="button"
-                  onClick={() => setNotifySuporteToggle((v) => !v)}
-                  className={`flex items-center justify-between gap-3 p-4 rounded-2xl border text-left transition-colors ${
-                    notifySuporteToggle
-                      ? "bg-emerald-500/10 border-emerald-500/30"
-                      : "bg-white/[0.03] border-white/10 hover:border-white/25"
-                  }`}
+                  onClick={handleSupBackupDownload}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold hover:bg-emerald-500/30 transition-colors"
                 >
-                  <div>
-                    <p className="text-xs font-bold text-white">Notificar novos chamados</p>
-                    <p className="text-[10px] text-[#8a96a3] mt-0.5">E-mail ao abrir um chamado (mensagem inicial)</p>
-                  </div>
-                  <span className={`relative w-10 h-5.5 rounded-full transition-colors ${notifySuporteToggle ? "bg-emerald-500" : "bg-white/10"}`}>
-                    <span className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white transition-all ${notifySuporteToggle ? "left-5" : "left-0.5"}`} />
-                  </span>
+                  <Download className="w-3.5 h-3.5" />
+                  Baixar ZIP Consolidado
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setNotifyParceriaToggle((v) => !v)}
-                  className={`flex items-center justify-between gap-3 p-4 rounded-2xl border text-left transition-colors ${
-                    notifyParceriaToggle
-                      ? "bg-cyan-500/10 border-cyan-500/30"
-                      : "bg-white/[0.03] border-white/10 hover:border-white/25"
-                  }`}
-                >
-                  <div>
-                    <p className="text-xs font-bold text-white">Notificar novos interessados</p>
-                    <p className="text-[10px] text-[#8a96a3] mt-0.5">E-mail ao receber "Quero Fazer Parte" (WhatsApp em destaque)</p>
-                  </div>
-                  <span className={`relative w-10 h-5.5 rounded-full transition-colors ${notifyParceriaToggle ? "bg-cyan-500" : "bg-white/10"}`}>
-                    <span className={`absolute top-0.5 w-4.5 h-4.5 rounded-full bg-white transition-all ${notifyParceriaToggle ? "left-5" : "left-0.5"}`} />
-                  </span>
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 pt-1">
-                <button
-                  type="submit"
-                  disabled={emailConfigSaving}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gold-metallic text-black font-black uppercase text-xs tracking-wider shadow-lg shadow-[#d12a62]/20 hover:brightness-110 active:scale-[0.98] transition-all duration-300 disabled:opacity-50"
-                >
-                  {emailConfigSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  Salvar configurações
-                </button>
-                <button
-                  type="button"
-                  onClick={handleTestSupportEmail}
-                  disabled={emailTestLoading}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs font-bold text-[#e8edf2] hover:border-emerald-500/40 hover:text-emerald-400 transition-colors disabled:opacity-50"
-                  title="Envia um e-mail de teste para o destino de suporte"
-                >
-                  {emailTestLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <SendHorizonal className="w-4 h-4" />}
-                  Enviar e-mail de teste
-                </button>
-              </div>
-
-              {emailTestResult && (
-                <div className={`p-3 rounded-xl text-xs font-bold border ${
-                  emailTestResult.tipo === "success"
-                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                    : "bg-red-500/10 text-red-400 border-red-500/30"
-                }`}>
-                  {emailTestResult.texto}
-                </div>
               )}
-
-              <div className="p-3 rounded-2xl bg-[#0b0f14]/80 border border-white/[0.04] text-[10px] text-[#8a96a3] leading-relaxed">
-                As credenciais do servidor de e-mail vivem apenas no <span className="font-mono text-white">.env</span> do servidor
-                (SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, MAIL_FROM_NAME) — nunca são exibidas ou editadas aqui.
-                {emailSmtpStatus?.configured && (
-                  <span> Conexão atual: <span className="font-mono text-emerald-400">{emailSmtpStatus.user}</span> via <span className="font-mono text-white">{emailSmtpStatus.host}:{emailSmtpStatus.port}</span> {emailSmtpStatus.secure ? "(SSL)" : "(STARTTLS)"}.</span>
-                )}
-              </div>
-            </form>
+            </div>
           )}
         </div>
         </div>
