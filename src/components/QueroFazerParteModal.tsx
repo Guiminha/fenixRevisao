@@ -130,6 +130,7 @@ export default function QueroFazerParteModal({
       if (res.ok && data.success) {
         setSuccessMessage(data.message || "Sua solicitação foi enviada com sucesso!");
         resetForm();
+        setTimeout(() => handleClose(), 2000);
       } else {
         setErrorMessage(data.error || "Ocorreu um erro ao enviar sua solicitação.");
       }
