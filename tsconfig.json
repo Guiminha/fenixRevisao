@@ -24,6 +24,8 @@
     "noEmit": true
   },
   "exclude": [
+    "Lixo",
+    ".support-test-runtime",
     "node_modules",
     "dev-tools",
     "dist"

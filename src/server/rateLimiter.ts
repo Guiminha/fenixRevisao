@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { createLoginProtection } from "./loginProtection.js";
 
 interface RateLimitConfig {
   windowMs: number; // Time window in milliseconds
@@ -28,7 +29,7 @@ export function createRateLimiter(config: RateLimitConfig) {
         hitsMap.delete(key);
       }
     }
-  }, 5 * 60 * 1000);
+  }, 5 * 60 * 1000).unref();
 
   return (req: Request, res: Response, next: NextFunction) => {
     // Determine client identifier using the socket/express-derived IP only.
@@ -88,12 +89,8 @@ function getUserOrIpKey(req: Request): string {
 
 // Pre-configured rate limiters for different application endpoints
 
-// 1. Strict Auth / Login Limiter: 10 attempts per 15 minutes by IP
-export const loginRateLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: 10, // 10 attempts per 15 mins
-  message: "Muitas tentativas de login a partir deste endereço IP. Por favor, aguarde 15 minutos antes de tentar novamente."
-});
+// Three failed logins lock both IP and account for five minutes.
+export const loginRateLimiter = createLoginProtection();
 
 // 2. Contact / Ouvidoria Form Submission Limiter: 5 submissions per 10 minutes by IP
 export const ouvidoriaRateLimiter = createRateLimiter({

@@ -49,6 +49,17 @@ server: {
       // (data/, dev-tools/, uploads/, env files and database backups).
       fs: {
         deny: [
+          '**/Lixo/**',
+          '**/.support-test-runtime/**',
+          '**/.admin-preview/**',
+          '**/.git/**',
+          '**/src/server/**',
+          '**/tests/**',
+          '**/*.zip',
+          '**/*.sql',
+          '**/Vulnerabilidades.txt',
+          '**/Correcoes-Seguranca.txt',
+          '**/AGENTS.md',
           'data/**',
           'dev-tools/**',
           'uploads/**',

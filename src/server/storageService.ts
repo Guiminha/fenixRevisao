@@ -28,18 +28,45 @@ async function headObject(bucket: string, key: string): Promise<{ size: number; 
   const url = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
   const apiKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
   const endpoint = `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`;
-  const res = await fetch(endpoint, { method: "HEAD", headers: { apikey: apiKey, Authorization: `Bearer ${apiKey}` } });
+  const res = await fetch(endpoint, { method: "HEAD", signal: AbortSignal.timeout(1500), redirect: "error", headers: { apikey: apiKey, Authorization: `Bearer ${apiKey}` } });
   if (!res.ok) throw new Error(`Object not found (${res.status})`);
   const size = Number(res.headers.get("content-length") || 0);
   const last = res.headers.get("last-modified");
   return { size, lastModified: last ? new Date(last) : new Date() };
 }
 
+// Forward ranges to Storage; never buffer the entire video for a small range.
+export async function streamStorageObject(bucket: string, key: string, range?: { offset: number; length: number }, signal?: AbortSignal): Promise<Readable> {
+  const base = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  const endpoint = `${base}/storage/v1/object/${encodeURIComponent(bucket)}/${key.split("/").map(encodeURIComponent).join("/")}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120_000);
+  timer.unref();
+  const headers: Record<string, string> = { apikey: secret, Authorization: `Bearer ${secret}` };
+  if (range) headers.Range = `bytes=${range.offset}-${range.offset + range.length - 1}`;
+  try {
+    const result = await fetch(endpoint, { headers, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal, redirect: "error" });
+    if (!result.ok || !result.body || (range && result.status !== 206)) {
+      controller.abort();
+      throw new Error(`Storage não respondeu ao intervalo solicitado (${result.status}).`);
+    }
+    const stream = Readable.fromWeb(result.body as any);
+    stream.once("close", () => { clearTimeout(timer); controller.abort(); });
+    stream.once("end", () => clearTimeout(timer));
+    return stream;
+  } catch (error) {
+    clearTimeout(timer);
+    controller.abort();
+    throw error;
+  }
+}
+
 export interface StorageCompatibleClient {
   putObject(bucket: string, key: string, buffer: Buffer, size?: number, meta?: any): Promise<any>;
   statObject(bucket: string, key: string): Promise<{ size: number; metaData: any; lastModified: Date }>;
-  getObject(bucket: string, key: string): Promise<Readable>;
-  getPartialObject(bucket: string, key: string, offset: number, length: number): Promise<Readable>;
+  getObject(bucket: string, key: string, signal?: AbortSignal): Promise<Readable>;
+  getPartialObject(bucket: string, key: string, offset: number, length: number, signal?: AbortSignal): Promise<Readable>;
   removeObject(bucket: string, key: string): Promise<any>;
   listObjectsV2(bucket: string, prefix?: string, recursive?: boolean): AsyncIterable<any>;
   bucketExists(bucket: string): Promise<boolean>;
@@ -60,17 +87,12 @@ export function getActiveStorageClient(): StorageCompatibleClient {
       const { size, lastModified } = await headObject(bucket, key);
       return { size, metaData: {}, lastModified };
     },
-    async getObject(bucket: string, key: string): Promise<Readable> {
-      const { data, error } = await sb.storage.from(bucket).download(key);
-      if (error) throw new Error(error.message);
-      const buf = Buffer.from(await data.arrayBuffer());
-      return Readable.from(buf);
+    async getObject(bucket: string, key: string, signal?: AbortSignal): Promise<Readable> {
+      return streamStorageObject(bucket, key, undefined, signal);
     },
-    async getPartialObject(bucket: string, key: string, offset: number, length: number): Promise<Readable> {
-      const { data, error } = await sb.storage.from(bucket).download(key);
-      if (error) throw new Error(error.message);
-      const buf = Buffer.from(await data.arrayBuffer());
-      return Readable.from(buf.subarray(offset, offset + length));
+    async getPartialObject(bucket: string, key: string, offset: number, length: number, signal?: AbortSignal): Promise<Readable> {
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 1) throw new Error("Intervalo inválido.");
+      return streamStorageObject(bucket, key, { offset, length }, signal);
     },
     async removeObject(bucket: string, key: string) {
       const { error } = await sb.storage.from(bucket).remove([key]);

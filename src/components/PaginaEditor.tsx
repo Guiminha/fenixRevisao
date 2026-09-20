@@ -143,7 +143,7 @@ export default function PaginaEditor() {
   const dragIdx = useRef<number | null>(null);
 
   const getAuthHeaders = () => {
-    const t = token || localStorage.getItem("fenix_token");
+    const t = token;
     return t ? { Authorization: `Bearer ${t}` } : {};
   };
 

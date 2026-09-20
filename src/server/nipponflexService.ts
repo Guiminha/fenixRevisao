@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import https from "node:https";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { recordMetrics, reportSystemError } from './metricsService.js';
 
 // ====================================================================
 // Serviço de integração com a API Nipponflex (cadastro de D.I.s).
@@ -32,6 +33,7 @@ const MAX_LOGS = 500;
 const nipponflexAgent = new https.Agent({ rejectUnauthorized: false });
 
 export interface NfLogEntry {
+  id?: string;
   ts: string;        // HH:MM:SS (Brasília)
   nivel: "info" | "ok" | "erro" | "aviso";
   msg: string;
@@ -54,6 +56,7 @@ export interface NfRelatorio {
 }
 
 export interface NfEstado {
+  relatorioVersao?: number;
   status: "ok" | "erro" | "em_andamento";
   ultimaSincronizacao: string | null;
   ultimoArquivoBruto: string | null;
@@ -159,7 +162,7 @@ function requestNipponflex(url: string, opts: { method: string; headers?: Record
 // Logs em tempo real
 // ------------------------------------------------------------------
 function addLog(nivel: NfLogEntry["nivel"], msg: string): void {
-  logsAtual.push({ ts: horaBrasilia(), nivel, msg });
+  logsAtual.push({ id: crypto.randomUUID(), ts: horaBrasilia(), nivel, msg });
   if (logsAtual.length > MAX_LOGS) logsAtual = logsAtual.slice(-MAX_LOGS);
   console.log(`[Nipponflex][${horaBrasilia()}] ${msg}`);
 }
@@ -271,7 +274,8 @@ function filtrarDados(rawText: string): { codigo: string; nome: string; situacao
   let dados: any[];
   try {
     const json = JSON.parse(rawText);
-    dados = Array.isArray(json?.dadoscadastrais) ? json.dadoscadastrais : [];
+    if (!Array.isArray(json?.dadoscadastrais)) throw new Error('Resposta sem a lista de dados cadastrais.');
+    dados = json.dadoscadastrais;
   } catch (e) {
     throw new Error(`Falha ao interpretar JSON da API: ${e instanceof Error ? e.message : e}`);
   }
@@ -296,10 +300,17 @@ async function sincronizarBanco(filtrados: { codigo: string; nome: string; situa
   const alterados: { codigo: string; nome: string; anterior: string; nova: string }[] = [];
 
   addLog("info", "Lendo D.I.s já cadastrados no banco (dis_fenix)...");
-  const { data: existentes, error: errExist } = await client.from("dis_fenix").select("codigo, situacao").range(0, 9999);
-  if (errExist) throw new Error(`Falha ao ler dis_fenix: ${errExist.message}`);
   const mapaExistente = new Map<string, string>();
-  for (const e of existentes || []) mapaExistente.set(e.codigo, e.situacao);
+  // Consultas grandes também sofrem o limite de linhas do PostgREST.
+  // Paginar em ordem estável evita classificar cadastros antigos como novos.
+  for (let offset = 0; ; ) {
+    const { data: existentes, error } = await client.from("dis_fenix")
+      .select("codigo, situacao").order("codigo").range(offset, offset + 499);
+    if (error) throw new Error(`Falha ao ler dis_fenix: ${error.message}`);
+    if (!existentes?.length) break;
+    for (const e of existentes) mapaExistente.set(String(e.codigo), e.situacao);
+    offset += existentes.length;
+  }
 
   const linhas = filtrados.map((f) => ({ codigo: f.codigo, nome: f.nome, situacao: f.situacao }));
 
@@ -320,6 +331,11 @@ async function sincronizarBanco(filtrados: { codigo: string; nome: string; situa
     const lote = linhas.slice(i, i + TAMANHO_LOTE_SYNC);
     const { error } = await client.from("dis_fenix").upsert(lote, { onConflict: "codigo" });
     if (error) throw new Error(`Falha no upsert de dis_fenix (lote ${i}): ${error.message}`);
+    const codes = new Set(lote.map(row => row.codigo));
+    await recordMetrics([
+      ...novos.filter(row => codes.has(row.codigo)).map(row => ({ kind: 'di_new' as const, entity_id: row.codigo, detail: { name: row.nome, previous: null, current: row.situacao } })),
+      ...alterados.filter(row => codes.has(row.codigo)).map(row => ({ kind: 'di_status' as const, entity_id: row.codigo, detail: { name: row.nome, previous: row.anterior, current: row.nova } })),
+    ]);
   }
 
   return { novos, alterados };
@@ -401,6 +417,7 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     return { success: false, erro: "Sincronização já em andamento." };
   }
   syncInProgress = true;
+  logsAtual = [];
 
   const rel: NfRelatorio = {
     data: dataArquivo(),
@@ -472,6 +489,8 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     estado.novosCadastrados = novos.length;
     estado.novosDetalhes = novos;
     estado.situacoesAlteradas = alterados;
+    estado.relatorioVersao = 2;
+    estado.ultimaSincronizacao = agoraISO();
     addLog("ok", `${novos.length} novo(s) D.I.(s) cadastrado(s).`);
     if (alterados.length > 0) {
       addLog("info", `${alterados.length} D.I.(s) mudaram de situação.`);
@@ -507,7 +526,7 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
 
     estado.status = "erro";
     estado.erro = e.message || String(e);
-    estado.ultimaSincronizacao = null;
+    reportSystemError('Nipponflex', 'SYNC_FAILED', 'A sincronização não foi concluída. Consulte os Logs de Sincronização.');
     addLog("erro", `ERRO na sincronização: ${e.message || String(e)}`);
     await persistirEstado();
 

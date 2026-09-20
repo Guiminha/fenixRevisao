@@ -3,6 +3,7 @@ import { Novidade, Banner, ViewType } from "../types";
 import { Play, Info, ArrowUpRight } from "lucide-react";
 import { useStore } from "../store";
 import { motion, AnimatePresence } from "motion/react";
+import { imageVariant, imageSources } from "../utils/imageVariants";
 
 interface HeroCarouselProps {
   slides: Novidade[];
@@ -47,7 +48,9 @@ function HeroSlideImage({ slide, index, currentIndex }: { slide: any; index: num
   })();
   return (
     <img
-      src={src}
+      src={imageVariant(src, 1600)}
+      srcSet={imageSources(src, [640, 960, 1600])}
+      sizes="(min-width: 1024px) calc(100vw - 256px), 100vw"
       alt={slide.titulo || "Destaque"}
       referrerPolicy="no-referrer"
       loading={index === currentIndex ? "eager" : "lazy"}
@@ -70,7 +73,11 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
     hiddenHomeCardIds = []
   } = useStore();
 
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [{ currentIndex, previousIndex }, setSlide] = useState({ currentIndex: 0, previousIndex: -1 });
+  const setCurrentIndex = (next: number | ((current: number) => number)) => setSlide(state => {
+    const index = typeof next === 'function' ? next(state.currentIndex) : next;
+    return index === state.currentIndex ? state : { currentIndex: index, previousIndex: state.currentIndex };
+  });
   const titleRef = useRef<HTMLHeadingElement>(null);
   const descRef = useRef<HTMLParagraphElement>(null);
   const [titleSize, setTitleSize] = useState<number | null>(null);
@@ -207,7 +214,9 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
               index === currentIndex ? "opacity-100 z-10" : "opacity-0 z-0"
             }`}
           >
-            <HeroSlideImage slide={slide} index={index} currentIndex={currentIndex} />
+            {(index === safeIndex || index === (safeIndex + 1) % activeSlides.length || index === previousIndex) && (
+              <HeroSlideImage slide={slide} index={index} currentIndex={safeIndex} />
+            )}
           </div>
         ))}
 

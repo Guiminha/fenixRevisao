@@ -127,15 +127,13 @@ export default function InicioView() {
     ) {
       const targetMatId = item.linkTarget || item.id;
       
-      // Update URL search query
+      setActiveView("conteudos");
+      // Acrescenta o material à entrada de histórico criada pela navegação.
       const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set("view", "conteudos");
       if (targetMatId) {
         newUrl.searchParams.set("material", targetMatId);
       }
-      window.history.pushState({}, "", newUrl.toString());
-
-      setActiveView("conteudos");
+      window.history.replaceState({}, "", newUrl.toString());
 
       // Scroll to material card on Conteudos page
       setTimeout(() => {

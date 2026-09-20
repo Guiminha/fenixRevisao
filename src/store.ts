@@ -2,21 +2,6 @@ import { create } from "zustand";
 import { User, ViewType, SubViewType, AdminTabType, LeaderBio, Novidade, Curso, Material, Tecnologia, AuditLog, Banner, FenixPost, FenixComment, ModeratorLink, DICode, SupportTicket, SupportUser, SupportTicketStatus, OuvidoriaMessage, PaginaBloco } from "./types";
 import { defaultData } from "./defaultData";
 
-// Validação mínima de JWT (offline fallback): 3 partes + exp no futuro.
-// O servidor continua sendo a autoridade real — isso só evita marcar
-// loggedIn=true com um token aleatório/forjado quando a API está fora.
-function looksLikeValidJwt(token: string): boolean {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return false;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
-    if (!payload || typeof payload.exp !== "number") return false;
-    return Date.now() / 1000 < payload.exp;
-  } catch {
-    return false;
-  }
-}
-
 let servidorIndisponivelAte = 0;
 
 // Cooldown de indisponibilidade: uma falha transitória marca o servidor como
@@ -128,7 +113,7 @@ interface PlatformState {
   fetchSupportUsers: () => Promise<{ success: boolean; users?: SupportUser[]; error?: string }>;
   saveSupportUser: (data: { email: string; nome: string; senha?: string; ativo: boolean }) => Promise<{ success: boolean; error?: string; message?: string }>;
   resetSupportPassword: (email: string, novaSenha: string) => Promise<{ success: boolean; error?: string; message?: string }>;
-  changeSupportPassword: (novaSenha: string) => Promise<{ success: boolean; error?: string; message?: string }>;
+  changeSupportPassword: (novaSenha: string, senhaAtual: string) => Promise<{ success: boolean; error?: string; message?: string }>;
 
   // Nipponflex (D.I.s via API)
   nfStatus: any;
@@ -206,13 +191,8 @@ export const useStore = create<PlatformState>((set, get) => {
     const hidden = localStorage.getItem("fenix_hidden_home_cards");
     if (hidden) initialHiddenCards = JSON.parse(hidden);
 
-    const storedUser = localStorage.getItem("fenix_user");
-    const storedToken = localStorage.getItem("fenix_token");
-    if (storedUser && storedToken) {
-      initialUser = JSON.parse(storedUser);
-      initialLoggedIn = true;
-      initialToken = storedToken;
-    }
+    localStorage.removeItem("fenix_user");
+    localStorage.removeItem("fenix_token");
   } catch (e) {
     console.error("Failed to parse local storage data on store initialization", e);
   }
@@ -292,7 +272,13 @@ export const useStore = create<PlatformState>((set, get) => {
     // Navigation Setters
     setActiveView: (view) => set({ activeView: view, activeCourse: null }),
     setSubView: (subView) => set({ subView }),
-    setActiveCourse: (course) => set({ activeCourse: course }),
+    setActiveCourse: (course) => {
+      const changed = course && get().activeCourse?.id !== course.id;
+      set({ activeCourse: course });
+      if (changed) void fetch(`/api/content/course-access/${encodeURIComponent(course.id)}`, {
+        method: 'POST', credentials: 'same-origin',
+      }).catch(() => {});
+    },
     setPendingCourse: (courseId) => set({ pendingCourseId: courseId }),
     setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
@@ -327,16 +313,6 @@ export const useStore = create<PlatformState>((set, get) => {
           }
         }
 
-        // Otherwise use what we have in localStorage (fallback offline).
-        // Sanidade mínima: só aceita token com formato JWT (3 partes) cujo exp
-        // ainda não passou — um token forjado/aleatório não marca loggedIn.
-        const storedUser = localStorage.getItem("fenix_user");
-        const storedToken = localStorage.getItem("fenix_token");
-        if (storedUser && storedToken && looksLikeValidJwt(storedToken)) {
-          set({ user: JSON.parse(storedUser), loggedIn: true, token: storedToken, authLoading: false });
-          return true;
-        }
-
         set({ user: null, loggedIn: false, token: null, authLoading: false });
         return false;
       } catch (e) {
@@ -360,9 +336,7 @@ export const useStore = create<PlatformState>((set, get) => {
           if (res.ok && contentType.includes("application/json")) {
             const data = await res.json();
             if (data.success) {
-              localStorage.setItem("fenix_user", JSON.stringify(data.user));
-              localStorage.setItem("fenix_token", data.token);
-              set({ user: data.user, loggedIn: true, token: data.token });
+              set({ user: data.user, loggedIn: true, token: null });
               get().fetchRestrictedData();
               return { success: true };
             } else {
@@ -425,7 +399,9 @@ export const useStore = create<PlatformState>((set, get) => {
       try {
         if (servidorDisponivel()) {
           try {
-            const res = await fetch("/api/content/public");
+            const host = window.location.hostname.toLowerCase();
+            const fullContent = host === 'adminfenix' || host.startsWith('adminfenix.');
+            const res = await fetch(fullContent ? "/api/content/public" : "/api/content/public?scope=home");
             const contentType = res.headers.get("content-type") || "";
             if (res.ok && contentType.includes("application/json")) {
               const data = await res.json();
@@ -437,7 +413,7 @@ export const useStore = create<PlatformState>((set, get) => {
                   localStorage.setItem("fenix_hidden_home_cards", JSON.stringify(merged));
                 } catch (e) {}
               }
-              set({ publicData: data });
+              set({ publicData: { ...get().publicData, ...data } });
               return;
             } else {
               console.warn("Express backend not available (returned non-JSON/HTML). Servidor indisponível — dados padrão.");
@@ -582,32 +558,8 @@ export const useStore = create<PlatformState>((set, get) => {
     },
 
     fetchAdminData: async () => {
-      if (!get().loggedIn || get().user?.role !== "admin") return;
-      get().fetchAdminDiCodes();
-      try {
-        if (servidorDisponivel()) {
-          try {
-            const headers: HeadersInit = {};
-            const token = get().token;
-            if (token) headers["Authorization"] = `Bearer ${token}`;
-            const res = await fetch("/api/admin/stats-and-logs", { headers });
-            const contentType = res.headers.get("content-type") || "";
-            if (res.ok && contentType.includes("application/json")) {
-              const data = await res.json();
-              set({ adminStats: data.stats, adminDiList: data.diList || [], adminLogs: data.auditLogs || [] });
-              return;
-            } else {
-              marcarServidorIndisponivel();
-            }
-          } catch (e) {
-            marcarServidorIndisponivel();
-          }
-        }
-
-        // Sem fallback direto ao Supabase: estatísticas admin só via API do servidor.
-      } catch (e) {
-        console.error("Failed to fetch admin statistics in fallback flow", e);
-      }
+      // Compatibilidade com os CRUDs existentes; métricas são consultadas pelo painel.
+      if (get().loggedIn && get().user?.role === 'admin') await get().fetchAdminDiCodes();
     },
 
     fetchAdminDiCodes: async () => {
@@ -986,7 +938,7 @@ export const useStore = create<PlatformState>((set, get) => {
     },
 
     // O responsável de suporte define a própria senha (1º acesso/após reset).
-    changeSupportPassword: async (novaSenha: string) => {
+    changeSupportPassword: async (novaSenha: string, senhaAtual: string) => {
       try {
         const headers: HeadersInit = { "Content-Type": "application/json" };
         const token = get().token;
@@ -994,7 +946,7 @@ export const useStore = create<PlatformState>((set, get) => {
         const res = await fetch("/api/support/change-password", {
           method: "POST",
           headers,
-          body: JSON.stringify({ novaSenha })
+          body: JSON.stringify({ novaSenha, senhaAtual })
         });
         const result = await res.json();
         if (res.ok && result.success) {
@@ -1914,7 +1866,7 @@ export const useStore = create<PlatformState>((set, get) => {
         if (servidorDisponivel()) {
           try {
             const headers: HeadersInit = { "Content-Type": "application/json" };
-            const token = get().token || localStorage.getItem("fenix_token");
+            const token = get().token;
             if (token) headers["Authorization"] = `Bearer ${token}`;
             await fetch("/api/admin/hidden-home-cards", {
               method: "POST",
@@ -1939,7 +1891,7 @@ export const useStore = create<PlatformState>((set, get) => {
       if (servidorDisponivel()) {
         try {
           const headers: HeadersInit = { "Content-Type": "application/json" };
-          const token = get().token || localStorage.getItem("fenix_token");
+          const token = get().token;
           if (token) headers["Authorization"] = `Bearer ${token}`;
           await fetch("/api/admin/hidden-home-cards", {
             method: "POST",

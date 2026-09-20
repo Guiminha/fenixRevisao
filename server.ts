@@ -3,12 +3,16 @@ import path from "path";
 import crypto from "crypto";
 import fs from "fs";
 import { gzipSync } from "zlib";
-import { spawn } from "child_process";
+import { hlsPlaylist, hlsObject, hlsSegment } from "./src/server/hlsService.js";
 import multer from "multer";
 import helmet from "helmet";
 import "dotenv/config";
+import { recordMetric, metricsReport, reportSystemError } from './src/server/metricsService.js';
+import { integrationStatus } from './src/server/integrationHealth.js';
+import { courseCoverPath, firstVimeoVideo, currentVimeoCover } from './src/server/vimeoCovers.js';
+import { previewWidth, resizePreview } from './src/server/imagePreview.js';
 import { createServer as createViteServer } from "vite";
-import { dbService, LeaderBio, Novidade, Curso, Material, Banner, FenixPost, supabase, getSupabaseTrustedClient } from "./src/server/db.js";
+import { dbService, LeaderBio, Novidade, Curso, Material, Banner, FenixPost, supabase, getSupabaseTrustedClient, getSupabaseClient } from "./src/server/db.js";
 import { 
   STORAGE_BUCKET,
   getActiveStorageClient, 
@@ -42,31 +46,26 @@ fenixModeracaoRateLimiter,
 passwordChangeRateLimiter
 } from "./src/server/rateLimiter.js";
 import { parseDICsv, buildDITemplateCSV } from "./src/server/diImport.js";
-import {
-  createSiteBackup,
-  listSiteBackups,
-  restoreSiteBackup,
-  getSiteStatus,
-  getManutencaoStatus,
-  setManutencao,
-  deleteSiteBackup,
-  buildBackupZip,
-  createDatabaseDump,
-  listBancoBackups,
-  deleteBancoBackup,
-  buildBancoBackupZip,
-  buildSuporteBackupZip,
-  ensureDeleteProtection,
-  collectMediaKeys,
-  removeOrphanMedia,
-  checkMediaIntegrity,
-  isRestoreInProgress
-} from "./src/server/backupService.js";
-import { jsPDF } from "jspdf";
-import JSZip from "jszip";
+import { getManutencaoStatus, setManutencao, collectMediaKeys, removeOrphanMedia } from "./src/server/backupService.js";
 import { getSmtpStatus, sendEmail, sendTestEmail, notifyNewLeadHtml } from "./src/server/mailService.js";
 
-const app = express();
+import { asyncHandler, validLoginBody, storageKey, keyFromMediaUrl, parseByteRange, concurrencyLimit, publicPost } from "./src/server/security.js";
+import { mediaPolicy } from "./src/server/mediaPolicy.js";
+import { SessionService, DuplicateDISessionError, type Identity } from "./src/server/sessionService.js";
+
+export const app = express();
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (res.statusCode >= 500 && req.path.startsWith('/api/')) {
+      reportSystemError('API', `HTTP_${res.statusCode}`, 'A solicitação falhou no servidor.', typeof req.route?.path === 'string' ? `${req.method} ${req.route.path}` : 'API');
+    }
+  });
+  next();
+});
+// Arquivos arquivados nunca devem ser disponibilizados pelo site, inclusive em desenvolvimento.
+app.use("/Lixo", (_req, res) => { res.status(404).end(); });
+const uploadConcurrency = concurrencyLimit(2, 8);
+const mediaConcurrency = concurrencyLimit(8, 64);
 const PORT = Number(process.env.PORT) || 3000;
 
 // ---------------- Compressão (gzip) + cache de resposta ----------------
@@ -96,15 +95,26 @@ app.use((req, res, next) => {
 // Cache em memória de respostas públicas pesadas (TTL curto). Qualquer escrita
 // em /api/admin invalida o cache (middleware adiante).
 const apiResponseCache = new Map<string, { data: string; time: number }>();
+const apiResponsePending = new Map<string, Promise<string>>();
+let publicCacheVersion = 0;
 function cacheJsonResponse(key: string, ttlMs: number, build: () => Promise<string>): Promise<string> {
   const hit = apiResponseCache.get(key);
   if (hit && Date.now() - hit.time < ttlMs) return Promise.resolve(hit.data);
-  return build().then((data) => {
-    apiResponseCache.set(key, { data, time: Date.now() });
+  const existing = apiResponsePending.get(key);
+  if (existing) return existing;
+  const version = publicCacheVersion;
+  const pending = build().then((data) => {
+    if (version === publicCacheVersion) apiResponseCache.set(key, { data, time: Date.now() });
     return data;
+  }).finally(() => {
+    if (apiResponsePending.get(key) === pending) apiResponsePending.delete(key);
   });
+  apiResponsePending.set(key, pending);
+  return pending;
 }
 function invalidatePublicApiCache() {
+  publicCacheVersion++;
+  apiResponsePending.clear();
   for (const k of apiResponseCache.keys()) apiResponseCache.delete(k);
 }
 
@@ -145,7 +155,7 @@ app.use(helmet({
 // Availability gate for /api/* routes in strict mode (SUPABASE_ONLY=1):
 // if Supabase is unreachable/missing, the API responds 503 (maintenance mode)
 // instead of falling back to local data. Data never leaves the Supabase.
-app.use(async (req, res, next) => {
+app.use(asyncHandler(async (req, res, next) => {
   if (!req.path.startsWith("/api/") && req.path !== "/api") return next();
   // Respostas de API não devem ser cacheadas por proxies/navegadores (dados podem
   // ser autenticados). Rotas de mídia (/api/storage/*) sobrescrevem depois.
@@ -156,7 +166,7 @@ app.use(async (req, res, next) => {
     return res.status(503).json({ error: "Serviço indisponível no momento (banco de dados em manutenção)." });
   }
   next();
-});
+}));
 
 // ---------- Validação de uploads (extensão + magic bytes) ----------
 // Extensões permitidas: mídia segura + documentos de apoio. Nada executável/servível.
@@ -237,7 +247,7 @@ function validateUploadBuffer(buffer: Buffer, filename: string): { ok: boolean; 
 // Configure Multer for memory storage (for large file & video uploads)
 const uploadMulter = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024 }, // Up to 200 MB
+  limits: { fileSize: 200 * 1024 * 1024, files: 1, fields: 8, parts: 9, fieldSize: 20000, fieldNameSize: 100 }, // Up to 200 MB
   fileFilter: (req: any, file: any, cb: any) => {
     const ext = fileExtOf(file.originalname || "");
     if (!ext || BLOCKED_UPLOAD_EXT.test(ext) || !ALLOWED_UPLOAD_EXT.test(ext)) {
@@ -255,7 +265,6 @@ const ALLOWED_UPLOAD_FOLDERS = new Set([
   "institucional",
   "professores",
   "cursos",
-  "cursos/capas",
   "cursos/videos",
   "paginas",
   "videos",
@@ -287,283 +296,60 @@ if (envJWTSecret) {
   console.warn("[Aviso] JWT_SECRET não definido. Gerado valor aleatório (sessões serão invalidadas no próximo boot).");
 }
 
-// Refresh Token Storage for reuse detection & rotation
-// Map: refreshToken => { role, code, supabaseToken, expiresAt, createdAt }
-interface RefreshSession {
-  role: "admin" | "user" | "support";
-  code: string;
-  name?: string;
-  supabaseToken?: string;
-  expiresAt: number;
-  createdAt: number;
-}
-const refreshSessions = new Map<string, RefreshSession>();
-// Keep track of used refresh tokens (token => timestamp) to detect reuse (theft detection)
-const usedRefreshTokens = new Map<string, { ts: number; code?: string }>();
-// JTIs revogados no logout ‐ access tokens emitidos antes do logout deixam de valer
-const revokedJtis = new Set<string>();
-// Teto absoluto da sessão: mesmo com rotação contínua, a sessão expira (criação + 30d)
-const REFRESH_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const USED_TOKENS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const USED_TOKENS_MAX_ITEMS = 10000;
-
-// Persist session maps to disk so a server restart (dev restarts included) does
-// not silently invalidate logged-in sessions. File lives in data/ (never served).
-const SESSIONS_FILE = path.join(process.cwd(), "data", "refresh_sessions.json");
-
-// Criptografia AES-256-GCM para os tokens at-rest (supabaseToken). A chave deriva
-// do JWT_SECRET ‐ o arquivo em disco nunca guarda tokens em texto puro.
-const SESSIONS_ENC_KEY = crypto.createHash("sha256").update(String(JWT_SECRET)).digest();
-
-function encryptAtRest(plain: string): string {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", SESSIONS_ENC_KEY, iv);
-  const enc = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return `${iv.toString("base64")}.${tag.toString("base64")}.${enc.toString("base64")}`;
-}
-
-function decryptAtRest(enc: string): string | null {
-  try {
-    const [ivB64, tagB64, dataB64] = enc.split(".");
-    if (!ivB64 || !tagB64 || !dataB64) return null;
-    const decipher = crypto.createDecipheriv("aes-256-gcm", SESSIONS_ENC_KEY, Buffer.from(ivB64, "base64"));
-    decipher.setAuthTag(Buffer.from(tagB64, "base64"));
-    return Buffer.concat([decipher.update(Buffer.from(dataB64, "base64")), decipher.final()]).toString("utf8");
-  } catch {
-    return null;
+async function lookupIdentity(code: string): Promise<Identity | null> {
+  if (/^\d{4,6}$/.test(code)) {
+    const di = await dbService.validateDICode(code);
+    return di.valid ? { code, role: "user", name: di.name || code, version: "di-v2" } : null;
   }
+  if (!/^[0-9a-f-]{36}$/i.test(code)) return null;
+  const trusted = getSupabaseTrustedClient();
+  if (!trusted) throw new Error("Autenticação indisponível.");
+  const { data, error } = await trusted.auth.admin.getUserById(code);
+  if (error) { if (error.status === 404) return null; throw error; }
+  const account = data?.user;
+  if (!account || ((account as any).banned_until && Date.parse((account as any).banned_until) > Date.now())) return null;
+  const version = account.updated_at || account.created_at;
+  if (account.app_metadata?.role === "admin") return { code, role: "admin", name: "Administrador Fênix", version };
+  const { data: cfg, error: cfgError } = await trusted.from("config").select("value").eq("key", "supportUsers").maybeSingle();
+  if (cfgError) throw cfgError;
+  const staff = Array.isArray(cfg?.value) ? cfg.value.find((u: any) => u.email?.toLowerCase() === account.email?.toLowerCase()) : null;
+  if (!staff?.ativo) return null;
+  return { code, role: "support", name: staff.nome || "Suporte Fênix", version: `${version}:${staff.sessionVersion || "legacy"}`,
+    mustChangePassword: staff.mustChangePassword === true };
 }
-
-function loadSessionsFromDisk() {
-  try {
-    if (!fs.existsSync(SESSIONS_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf-8"));
-    if (raw && Array.isArray(raw.sessions)) {
-      for (const s of raw.sessions) {
-        // Legado (texto puro) é aceito uma vez e re-criptografado no próximo persist
-        const stored =
-          typeof s.supabaseTokenEnc === "string"
-            ? decryptAtRest(s.supabaseTokenEnc)
-            : typeof s.supabaseToken === "string"
-              ? s.supabaseToken
-              : undefined;
-        refreshSessions.set(s.refreshToken, {
-          role: s.role,
-          code: s.code,
-          name: s.name,
-          supabaseToken: stored || undefined,
-          expiresAt: s.expiresAt,
-          createdAt: s.createdAt || Date.now()
-        });
-      }
-    }
-    if (raw && Array.isArray(raw.used)) {
-      for (const t of raw.used) {
-        if (typeof t === "string") usedRefreshTokens.set(t, { ts: Date.now() });
-        else if (t && typeof t.token === "string") usedRefreshTokens.set(t.token, { ts: t.at || Date.now(), code: t.code });
-      }
-    }
-    if (raw && Array.isArray(raw.revokedJtis)) {
-      for (const j of raw.revokedJtis) if (typeof j === "string") revokedJtis.add(j);
-    }
-    console.log(`[Sessões] ${refreshSessions.size} sessão(ões) ativa(s) carregada(s) do disco.`);
-  } catch (e: any) {
-    console.warn("[Sessões] Falha ao carregar sessões persistidas:", e?.message);
+const sessions = new SessionService(JWT_SECRET, lookupIdentity);
+function setSessionCookies(res: any, tokens: { access: string; refresh: string }) {
+  const options = { httpOnly: true, secure: isProduction, sameSite: "strict" as const, path: "/" };
+  res.cookie("access_token", tokens.access, { ...options, maxAge: 15 * 60 * 1000 });
+  res.cookie("refresh_token", tokens.refresh, { ...options, maxAge: 7 * 86400000 });
+}
+function clearSessionCookies(res: any) {
+  res.clearCookie("access_token", { path: "/" });
+  res.clearCookie("refresh_token", { path: "/" });
+}
+function publicIdentity(identity: Identity) {
+  const { version, ...user } = identity;
+  return user;
+}
+async function resolveUser(req: any, res: any): Promise<Identity | null> {
+  if (req.authResolved) return req.user || null;
+  req.authResolved = true;
+  const user = await sessions.authenticate(req.cookies?.access_token);
+  if (user) return (req.user = user);
+  const renewed = await sessions.refresh(req.cookies?.refresh_token);
+  if (renewed) {
+    setSessionCookies(res, renewed);
+    return (req.user = renewed.identity);
   }
+  if (req.cookies?.access_token || req.cookies?.refresh_token) clearSessionCookies(res);
+  return null;
 }
 
-function persistSessions() {
-  try {
-    const now = Date.now();
-    // Poda: tokens usados antigos (>30d) e teto de itens para o arquivo não crescer sem limite
-    const used = [...usedRefreshTokens.entries()]
-      .filter(([, v]) => now - v.ts < USED_TOKENS_MAX_AGE_MS)
-      .sort((a, b) => b[1].ts - a[1].ts)
-      .slice(0, USED_TOKENS_MAX_ITEMS)
-      .map(([token, v]) => ({ token, at: v.ts, code: v.code }));
-    const sessions = [...refreshSessions.entries()]
-      .filter(([, s]) => s.expiresAt > now && now - (s.createdAt || now) < REFRESH_MAX_AGE_MS)
-      .map(([refreshToken, s]) => ({
-        refreshToken,
-        role: s.role,
-        code: s.code,
-        name: s.name,
-        supabaseTokenEnc: s.supabaseToken ? encryptAtRest(s.supabaseToken) : undefined,
-        expiresAt: s.expiresAt,
-        createdAt: s.createdAt
-      }));
-    fs.mkdirSync(path.dirname(SESSIONS_FILE), { recursive: true });
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify({ sessions, used, revokedJtis: [...revokedJtis] }, null, 2), "utf-8");
-  } catch (e: any) {
-    console.warn("[Sessões] Falha ao persistir sessões:", e?.message);
-  }
-}
-
-loadSessionsFromDisk();
-
-// ============ SESSÑES DE ACESSO (jti) ‐ TOKEN SUPABASE FORA DO JWT ============
-// O JWT do acesso carrega apenas { role, name, jti } ‐ sem código D.I. nem email
-// (nada identificável decodificável no token). O código e o token de acesso ao
-// Supabase (RLS) ficam SOMENTE no servidor, resolvidos pelo jti ‐ nunca viajam
-// no payload do JWT nem saem no /api/auth/me como dado confiável. Invalidação
-// pontual também é possível removendo a entrada do jti (revogação efetiva antes
-// do exp).
-const jtiSessions = new Map<string, { supabaseToken?: string; code?: string; expiresAt: number }>();
-
-function newJti(): string {
-  return crypto.randomBytes(16).toString("hex");
-}
-
-function registerJtiSession(supabaseToken?: string, code?: string): string {
-  const jti = newJti();
-  jtiSessions.set(jti, { supabaseToken, code, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
-  pruneJtiSessions();
-  persistJtiSessions();
-  return jti;
-}
-
-function getJtiSession(jti?: string): { supabaseToken?: string; code?: string } | undefined {
-  if (!jti) return undefined;
-  const session = jtiSessions.get(jti);
-  if (!session) return undefined;
-  if (Date.now() > session.expiresAt) {
-    jtiSessions.delete(jti);
-    persistJtiSessions();
-    return undefined;
-  }
-  return session;
-}
-
-function pruneJtiSessions(max = 2000): void {
-  const now = Date.now();
-  for (const [jti, s] of jtiSessions.entries()) {
-    if (s.expiresAt <= now || jtiSessions.size > max) jtiSessions.delete(jti);
-  }
-}
-
-// ============ PERSISTÉNCIA DAS SESSÑES jti (code/supabaseToken) ============
-// O mapa jti->{code,supabaseToken} é a única ponte entre o JWT (stateless) e a
-// identidade real. Antes vivia só em memória: um restart do servidor derrubava o
-// mapeamento das sessões já logadas (JWT de 24h seguia válido) e o usuário seguia
-// "autenticado" SEM código ‐ tickets novos eram gravados com criadoPor vazio e
-// sumiam dos filtros, e mensagens órfãs de autor. Aqui as sessões jti são
-// persistidas em disco (supabaseToken criptografado) como as refresh sessions.
-const JTI_SESSIONS_FILE = path.join(process.cwd(), "data", "jti_sessions.json");
-
-function loadJtiSessionsFromDisk() {
-  try {
-    if (!fs.existsSync(JTI_SESSIONS_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(JTI_SESSIONS_FILE, "utf-8"));
-    if (!raw || !Array.isArray(raw.sessions)) return;
-    const now = Date.now();
-    for (const s of raw.sessions) {
-      if (typeof s.jti !== "string" || typeof s.expiresAt !== "number" || s.expiresAt <= now) continue;
-      const stored =
-        typeof s.supabaseTokenEnc === "string" ? decryptAtRest(s.supabaseTokenEnc) : undefined;
-      jtiSessions.set(s.jti, { supabaseToken: stored || undefined, code: s.code, expiresAt: s.expiresAt });
-    }
-    console.log(`[Sessões] ${jtiSessions.size} sessão(ões) de acesso (jti) carregada(s) do disco.`);
-  } catch (e: any) {
-    console.warn("[Sessões] Falha ao carregar sessões jti:", e?.message);
-  }
-}
-
-function persistJtiSessions() {
-  try {
-    const now = Date.now();
-    const sessions = [...jtiSessions.entries()]
-      .filter(([, s]) => s.expiresAt > now)
-      .map(([jti, s]) => ({
-        jti,
-        code: s.code,
-        supabaseTokenEnc: s.supabaseToken ? encryptAtRest(s.supabaseToken) : undefined,
-        expiresAt: s.expiresAt
-      }));
-    fs.mkdirSync(path.dirname(JTI_SESSIONS_FILE), { recursive: true });
-    fs.writeFileSync(JTI_SESSIONS_FILE, JSON.stringify({ sessions }, null, 2), "utf-8");
-  } catch (e: any) {
-    console.warn("[Sessões] Falha ao persistir sessões jti:", e?.message);
-  }
-}
-
-loadJtiSessionsFromDisk();
-
-// Helper: JWT signing ‐ payload SEM code/email (só role/name/jti; o code é
-// resolvido no servidor via getJtiSession, nunca viaja no token)
-function signJWT(payload: { role: string; name?: string; jti: string }, expiresInSeconds: number): string {
-  const header = { alg: "HS256", typ: "JWT" };
-  const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
-  const fullPayload = { ...payload, exp };
-
-  const base64Header = Buffer.from(JSON.stringify(header)).toString("base64url");
-  const base64Payload = Buffer.from(JSON.stringify(fullPayload)).toString("base64url");
-
-  const signature = crypto
-    .createHmac("sha256", JWT_SECRET)
-    .update(`${base64Header}.${base64Payload}`)
-    .digest("base64url");
-
-  return `${base64Header}.${base64Payload}.${signature}`;
-}
-
-// Helper: JWT verification ‐ retorna só o que viaja no token (sem code/supabaseToken)
-function verifyJWT(token: string): { role: "admin" | "user"; name?: string; jti?: string } | null {
-  if (!token) return null;
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const [base64Header, base64Payload, signature] = parts;
-
-    // Verify standard server HMAC signature (no unverified payload fallback allowed)
-    const expectedSignature = crypto
-      .createHmac("sha256", JWT_SECRET)
-      .update(`${base64Header}.${base64Payload}`)
-      .digest("base64url");
-
-    const sigBuf = Buffer.from(signature, "base64url");
-    const expBuf = Buffer.from(expectedSignature, "base64url");
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
-
-    const payload = JSON.parse(Buffer.from(base64Payload, "base64url").toString("utf-8"));
-    if (!payload.exp || Date.now() / 1000 > payload.exp) return null;
-    return { role: payload.role || "user", name: payload.name || "", jti: payload.jti };
-  } catch (e) {
-    return null;
-  }
-}
+app.use("/api", globalApiRateLimiter);
 
 // Middlewares
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
-
-// Serve uploaded files statically
-// Serve apenas assets estáticos do app (public/uploads: fallbacks de imagem
-// referenciados em código). Uploads dinâmicos ficam 100% no Supabase Storage.
-// Materiais privados nunca são servidos anonimamente por aqui.
-const privateUploadsCache = new Map<string, { time: number; isPrivate: boolean }>();
-app.use("/uploads", async (req: any, res, next) => {
-  const name = (req.path || "").replace(/^\/+/, "");
-  if (!name) return next();
-  const cached = privateUploadsCache.get(name);
-  let isPrivate = false;
-  if (cached && Date.now() - cached.time < 15_000) {
-    isPrivate = cached.isPrivate;
-  } else {
-    try {
-      const mats = await dbService.getMateriais();
-      isPrivate = mats.some((m: any) => !m.isPublic && m.fileUrl === `/uploads/${name}`);
-    } catch {
-      // Banco indisponível: não derruba a mídia pública (acesso liberado).
-    }
-    privateUploadsCache.set(name, { time: Date.now(), isPrivate });
-    if (privateUploadsCache.size > 500) privateUploadsCache.clear();
-  }
-  if (!isPrivate) return next();
-  if (isMaterialMediaAllowed(req, res)) return next();
-  return res.status(404).end();
-});
-app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
 
 // Standard lightweight Cookie Parser Middleware
 app.use((req: any, res, next) => {
@@ -579,12 +365,54 @@ app.use((req: any, res, next) => {
   next();
 });
 
+// Serve uploaded files statically
+// Serve apenas assets estáticos do app (public/uploads: fallbacks de imagem
+// referenciados em código). Uploads dinâmicos ficam 100% no Supabase Storage.
+// Materiais privados nunca são servidos anonimamente por aqui.
+const privateUploadsCache = new Map<string, { time: number; isPrivate: boolean }>();
+app.use("/uploads", asyncHandler(async (req: any, res, next) => {
+  const name = (req.path || "").replace(/^\/+/, "");
+  if (!name) return next();
+  const cached = privateUploadsCache.get(name);
+  let isPrivate = false;
+  if (cached && Date.now() - cached.time < 15_000) {
+    isPrivate = cached.isPrivate;
+  } else {
+    try {
+      const mats = (await dbService.getData(undefined, true)).materiais;
+      isPrivate = mats.some((m: any) => !m.isPublic && m.fileUrl === `/uploads/${name}`);
+    } catch {
+      return res.status(503).end();
+    }
+    privateUploadsCache.set(name, { time: Date.now(), isPrivate });
+    if (privateUploadsCache.size > 500) privateUploadsCache.clear();
+  }
+  if (!isPrivate) return next();
+  if (await isMaterialMediaAllowed(req, res)) return next();
+  return res.status(404).end();
+}));
+app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
+
 // Apply Global Rate Limiter to all API endpoints
-app.use("/api", globalApiRateLimiter);
+
 
 // Qualquer escrita em /api/admin invalida o cache das respostas públicas.
 app.use("/api/admin", (req: any, res: any, next: any) => {
-  if (req.method !== "GET") invalidatePublicApiCache();
+  if (req.method !== "GET") {
+    invalidatePublicApiCache();
+    res.on('finish', invalidatePublicApiCache);
+  }
+  next();
+});
+
+app.use("/api", (req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  if (origin) {
+    try { if (new URL(origin).host !== req.headers.host) return res.status(403).json({ error: "Origem não permitida." }); }
+    catch { return res.status(403).json({ error: "Origem inválida." }); }
+  }
+  if (req.headers["sec-fetch-site"] === "cross-site") return res.status(403).json({ error: "Origem não permitida." });
   next();
 });
 
@@ -716,8 +544,10 @@ const PUBLIC_VALID_PATHS = new Set([
   "/tecnologias",
   "/escola-fenix",
   "/conteudos",
+  "/materiais",
   "/suporte",
   "/elite-milionario",
+  "/elite-milionaria",
   "/moderacao-fenix",
   "/moderacao-fenix-x9k2"
 ]);
@@ -742,7 +572,7 @@ app.use((req: any, res: any, next: any) => {
 
   const valid = isAdminHost(req) || isSupportHost(req)
     ? pathname === "/"
-    : PUBLIC_VALID_PATHS.has(pathname);
+    : PUBLIC_VALID_PATHS.has(pathname.replace(/\/+$/, "") || "/");
 
   if (!valid) {
     return res.redirect(302, "/");
@@ -750,191 +580,30 @@ app.use((req: any, res: any, next: any) => {
   return next();
 });
 
-// Authentication middleware
-function authenticateUser(req: any, res: any, next: () => void) {
-  let accessToken = req.cookies.access_token;
-
-  // Fallback to Authorization Header (important for iframe/third-party cookie blocking)
-  if (!accessToken && req.headers.authorization) {
-    const parts = req.headers.authorization.split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") {
-      accessToken = parts[1];
-    }
+// Every protected request revalidates the identity and current permissions.
+async function authenticateUser(req: any, res: any, next: () => void) {
+  const user = await resolveUser(req, res);
+  if (!user) return res.status(401).json({ error: "Sessão expirada. Faça login novamente." });
+  if (user.mustChangePassword && !["/api/auth/me", "/api/auth/logout", "/api/support/change-password"].includes(req.path)) {
+    return res.status(403).json({ error: "Defina sua própria senha para continuar.", mustChangePassword: true });
   }
-
-  if (!accessToken) {
-    // If no access token, try refreshing automatically using the refresh token
-    const refreshed = handleRefreshFlow(req, res);
-    if (refreshed) {
-      req.user = { ...refreshed, supabaseToken: undefined, jti: undefined };
-      return next();
-    }
-    return res.status(401).json({ error: "Não autenticado. Código de acesso exigido." });
-  }
-
-  let decoded = verifyJWT(accessToken);
-  if (decoded && decoded.jti && revokedJtis.has(decoded.jti)) decoded = null;
-  if (!decoded) {
-    // Token invalid or expired, try refresh flow
-    const refreshed = handleRefreshFlow(req, res);
-    if (refreshed) {
-      req.user = { ...refreshed, supabaseToken: undefined, jti: undefined };
-      return next();
-    }
-    return res.status(401).json({ error: "Sessão expirada. Por favor, acesse novamente." });
-  }
-
-  const session = getJtiSession(decoded.jti);
-  if (!session) {
-    // JWT válido mas o mapeamento jti sumiu (ex.: restart antes da persistência
-    // das sessões). O refresh flow rotaciona o access token e re-registra o jti
-    // com code/supabaseToken vindos da sessão persistida ‐ sem re-login do
-    // usuário e sem risco de operações "sem código" (tickets órfãos).
-    const refreshed = handleRefreshFlow(req, res);
-    if (refreshed) {
-      req.user = { ...refreshed, supabaseToken: undefined, jti: undefined };
-      return next();
-    }
-  }
-  req.user = { role: decoded.role, code: session?.code, name: decoded.name, jti: decoded.jti, supabaseToken: session?.supabaseToken };
   next();
 }
-
-// Optional authentication middleware (populates req.user if present, but does not block if unauthenticated)
-function optionalAuthenticateUser(req: any, res: any, next: () => void) {
-  let accessToken = req.cookies?.access_token;
-
-  if (!accessToken && req.headers.authorization) {
-    const parts = req.headers.authorization.split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") {
-      accessToken = parts[1];
-    }
-  }
-
-  if (accessToken) {
-    let decoded = verifyJWT(accessToken);
-    if (decoded && decoded.jti && revokedJtis.has(decoded.jti)) decoded = null;
-    if (decoded) {
-      let session = getJtiSession(decoded.jti);
-      if (!session) {
-        const refreshed = handleRefreshFlow(req, res);
-        if (refreshed) {
-          req.user = { ...refreshed, supabaseToken: undefined, jti: undefined };
-          return next();
-        }
-      }
-      req.user = { role: decoded.role, code: session?.code, name: decoded.name, jti: decoded.jti, supabaseToken: session?.supabaseToken };
-      return next();
-    }
-  }
-
-  const refreshed = handleRefreshFlow(req, res);
-  if (refreshed) {
-    req.user = { ...refreshed, supabaseToken: undefined, jti: undefined };
-  }
-
+async function optionalAuthenticateUser(req: any, res: any, next: () => void) {
+  await resolveUser(req, res);
   next();
 }
-
-// Admin only guard middleware
-function requireAdmin(req: any, res: any, next: () => void) {
-  authenticateUser(req, res, () => {
-    if (req.user?.role !== "admin") {
-      return res.status(403).json({ error: "Acesso restrito apenas para administradores." });
-    }
+async function requireAdmin(req: any, res: any, next: () => void) {
+  return authenticateUser(req, res, () => {
+    if (req.user.role !== "admin") return res.status(403).json({ error: "Acesso restrito apenas para administradores." });
     next();
   });
 }
-
-function requireSupportOrAdmin(req: any, res: any, next: () => void) {
-  authenticateUser(req, res, () => {
-    if (req.user?.role !== "support" && req.user?.role !== "admin") {
-      return res.status(403).json({ error: "Acesso restrito apenas para o suporte." });
-    }
+async function requireSupportOrAdmin(req: any, res: any, next: () => void) {
+  return authenticateUser(req, res, () => {
+    if (!["support", "admin"].includes(req.user.role)) return res.status(403).json({ error: "Acesso restrito apenas para o suporte." });
     next();
   });
-}
-
-// Handles Refresh Token Rotation & Reuse Detection
-function handleRefreshFlow(req: any, res: any): { role: "admin" | "user" | "support"; code: string; name?: string } | null {
-  const refreshToken = req.cookies.refresh_token;
-  if (!refreshToken) return null;
-
-  // 1. Detect Reuse (If a previously invalidated/used token is presented)
-  if (usedRefreshTokens.has(refreshToken)) {
-    const usedRec = usedRefreshTokens.get(refreshToken);
-    console.warn(`SECURITY ALERT: Refresh token reuse detected! Revoking all sessions for client.`);
-    // Revoga TODAS as sessões (refresh + access/jti) da mesma conta ‐ um token
-    // roubado não sobrevive à detecção de reuso em nenhum dispositivo.
-    if (usedRec && usedRec.code) {
-      for (const [t, s] of refreshSessions.entries()) {
-        if (s.code === usedRec.code) refreshSessions.delete(t);
-      }
-      for (const [jti, s] of jtiSessions.entries()) {
-        if (s.code === usedRec.code) {
-          revokedJtis.add(jti);
-          jtiSessions.delete(jti);
-        }
-      }
-      persistSessions();
-    }
-    // Security action: Clear all cookies to lock down account
-    res.clearCookie("access_token", { path: "/" });
-    res.clearCookie("refresh_token", { path: "/" });
-    return null;
-  }
-
-  const session = refreshSessions.get(refreshToken);
-  if (!session) return null;
-
-  // 2. Check Expiry (janela rolante de 7d + teto absoluto de 30d desde a criação)
-  const createdAt = session.createdAt || Date.now();
-  if (Date.now() > session.expiresAt || Date.now() - createdAt > REFRESH_MAX_AGE_MS) {
-    refreshSessions.delete(refreshToken);
-    res.clearCookie("access_token", { path: "/" });
-    res.clearCookie("refresh_token", { path: "/" });
-    return null;
-  }
-
-  // 3. Rotate Refresh Token (One-Time Use constraint)
-  refreshSessions.delete(refreshToken);
-  usedRefreshTokens.set(refreshToken, { ts: Date.now(), code: session.code });
-
-  const newRefreshToken = crypto.randomBytes(32).toString("hex");
-  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-  refreshSessions.set(newRefreshToken, {
-    role: session.role,
-    code: session.code,
-    name: session.name,
-    supabaseToken: session.supabaseToken,
-    expiresAt: Date.now() + sevenDaysMs,
-    createdAt
-  });
-  persistSessions();
-
-  // Issue new access and refresh tokens (supabaseToken/code ficam no servidor via jti)
-  const jti = registerJtiSession(session.supabaseToken, session.code);
-  const newAccessToken = signJWT({ role: session.role, name: session.name, jti }, 24 * 60 * 60); // 24h
-
-  res.cookie("access_token", newAccessToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 24 * 60 * 60 * 1000
-  });
-
-  res.cookie("refresh_token", newRefreshToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: sevenDaysMs
-  });
-
-  persistSessions();
-  return { role: session.role, code: session.code, name: session.name };
 }
 
 // ---------------- API ENDPOINTS ----------------
@@ -951,306 +620,58 @@ app.get("/api/download-status-md", (req, res) => {
 });
 
 // 1. Auth Endpoint
-// Lockout adicional POR CONTA (email ou código D.I.): 10 falhas/15min ‐ cobre
-// brute-force distribuído entre IPs, complementando o loginRateLimiter (por IP).
-const LOGIN_ACCOUNT_MAX_FAILURES = 10;
-const LOGIN_ACCOUNT_WINDOW_MS = 15 * 60 * 1000;
-const loginFailures = new Map<string, { count: number; windowStart: number }>();
-
-function isAccountLocked(account: string): boolean {
-  const rec = loginFailures.get(account.toLowerCase());
-  if (!rec) return false;
-  if (Date.now() - rec.windowStart > LOGIN_ACCOUNT_WINDOW_MS) {
-    loginFailures.delete(account.toLowerCase());
-    return false;
-  }
-  return rec.count >= LOGIN_ACCOUNT_MAX_FAILURES;
-}
-
-function registerLoginFailure(account: string): void {
-  const key = account.toLowerCase();
-  const rec = loginFailures.get(key);
-  const now = Date.now();
-  if (!rec || now - rec.windowStart > LOGIN_ACCOUNT_WINDOW_MS) {
-    loginFailures.set(key, { count: 1, windowStart: now });
-  } else {
-    rec.count += 1;
-  }
-}
-
-function clearLoginFailures(account: string): void {
-  loginFailures.delete(account.toLowerCase());
-}
-
-// Administrador do .env: verificação por HASH (scrypt) em vez de texto puro.
-// Formato de ADMIN_PASSWORD_HASH: scrypt$16384$8$1$<salt_b64>$<hash_b64>
-// A comparação textual legada (ADMIN_PASSWORD) permanece como fallback para
-// implantações ainda não migradas, porém com aviso no console.
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || "";
-
-function safeEqualStr(a: string, b: string): boolean {
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  if (ba.length !== bb.length) {
-    return crypto.timingSafeEqual(
-      crypto.createHash("sha256").update(ba).digest(),
-      crypto.createHash("sha256").update(bb).digest()
-    );
-  }
-  return crypto.timingSafeEqual(ba, bb);
-}
-
-function verifyAdminPassword(input: string): boolean {
-  if (ADMIN_PASSWORD_HASH) {
-    const parts = ADMIN_PASSWORD_HASH.split("$");
-    if (parts.length === 6 && parts[0] === "scrypt") {
-      const N = Number(parts[1]);
-      const r = Number(parts[2]);
-      const p = Number(parts[3]);
-      const saltB64 = parts[4];
-      const hashB64 = parts[5];
-      if (N > 0 && r > 0 && p > 0 && saltB64 && hashB64 &&
-          hashB64.length >= 32 && /^[A-Za-z0-9+/=]+$/.test(hashB64)) {
-        try {
-          const derived = crypto.scryptSync(input, Buffer.from(saltB64, "base64"), 32, { N, r, p });
-          const expected = Buffer.from(hashB64, "base64");
-          return expected.length === derived.length && crypto.timingSafeEqual(derived, expected);
-        } catch {
-          console.warn("[Aviso] Falha ao verificar ADMIN_PASSWORD_HASH (params inválidos?).");
-        }
-      } else {
-        console.warn("[Aviso] ADMIN_PASSWORD_HASH com formato inválido ‐ ignorando.");
-      }
-    }
-  }
-  if (process.env.ADMIN_PASSWORD) {
-    console.warn("[Aviso] Senha admin verificada em texto puro (env ADMIN_PASSWORD). Defina ADMIN_PASSWORD_HASH (scrypt) para comparação segura.");
-    return safeEqualStr(input, String(process.env.ADMIN_PASSWORD));
-  }
-  return false;
-}
-
-app.post("/api/auth/login", loginRateLimiter, async (req, res) => {
+app.post("/api/auth/login", loginRateLimiter, asyncHandler(async (req, res) => {
+  if (!validLoginBody(req.body)) return res.status(400).json({ error: "Informe um código D.I. de 4 a 6 dígitos ou e-mail e senha válidos." });
   const { code, email, password } = req.body;
-  const accountKey = email ? email.trim().toLowerCase() : (code || "").toUpperCase();
-  if (accountKey && isAccountLocked(accountKey)) {
-    return res.status(429).json({
-      error: "Muitas tentativas de login para esta conta. Por favor, aguarde 15 minutos antes de tentar novamente."
-    });
-  }
-  let role: "admin" | "user" | "support" | null = null;
-  let userCode = code || "";
-  let supabaseToken: string | undefined = undefined;
-
-if (email && password) {
-    if (supabase) {
-      try {
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
-        if (authError) {
-          console.error("[Supabase Auth] Login falhou para:", maskEmail(email), authError.message);
-        } else if (authData && authData.user && authData.session) {
-          console.log("[Supabase Auth] Login bem sucedido via Supabase para:", maskEmail(email));
-          // Segurança: role de administrador vem SOMENTE de app_metadata (controlada pelo servidor).
-          // user_metadata é editável pelo próprio usuário e NUNCA é aceita como papel admin.
-          const hasAppAdmin = authData.user.app_metadata?.role === "admin";
-          const isUserAdmin = hasAppAdmin;
-          if (isUserAdmin) {
-            role = "admin";
-          } else if (await dbService.isSupportUser(email)) {
-            role = "support";
-          } else {
-            role = "user";
-          }
-          userCode = authData.user.id;
-          supabaseToken = authData.session.access_token;
-
-          if (!isUserAdmin && role !== "support") {
-            console.warn(`[Supabase Auth] Atenção: O usuário ${maskEmail(email)} foi autenticado, mas NÂO possui permissão especial (role determinada como "${role}").`);
-          }
-        }
-      } catch (err: any) {
-        console.error("[Supabase Auth] Erro inesperado no login do Supabase:", err);
-      }
-    }
-  }
-
-  let userName = "";
-  // Para role "support": indica que o responsável ainda precisa definir a própria
-  // senha (1º acesso ou redefinição do admin). Vai para o client na resposta.
-  let supportMustChange: boolean | undefined;
-  if (email) {
-    if (role === "support") {
-      const supportUser = await dbService.getSupportUserByEmail(email);
-      userName = supportUser?.nome || "Suporte Fênix";
-      supportMustChange = supportUser?.mustChangePassword === true;
-    } else {
-      userName = "Administrador Fênix";
-    }
-  } else if (code) {
-    const valResult = await dbService.validateDICode(code);
-    if (!valResult.valid) {
-      registerLoginFailure(accountKey);
-      return res.status(401).json({ error: valResult.message || "Código D. I. não encontrado. Verifique o seu código." });
-    }
-    role = valResult.role as "admin" | "user";
-    userCode = valResult.userCode || code;
-    userName = valResult.name || userCode;
-  }
-
-  if (!role) {
-    registerLoginFailure(accountKey);
-    return res.status(401).json({ error: "Credenciais inválidas. Verifique o email/senha ou código." });
-  }
-
-  clearLoginFailures(accountKey);
-
-  // Record audit log for login tracking
+  let identity: Identity | null = null;
   if (code) {
-    dbService.recordAuditLog(
-      userCode,
-      "LOGIN_RESTRITO_DI",
-      `Acesso registrado com código D.I. na �?rea Restrita: ${userCode} (${userName})`
-    ).catch(() => {});
-  } else if (email) {
-    dbService.recordAuditLog(
-      email,
-      "LOGIN_SISTEMA",
-      `Login efetuado no sistema: ${email}`
-    ).catch(() => {});
+    identity = await lookupIdentity(code);
+  } else {
+    // One auth client per login: never mutate the shared public Supabase client.
+    const client = getSupabaseClient();
+    if (!client) throw new Error("Autenticação indisponível.");
+    const { data, error } = await client.auth.signInWithPassword({ email: email!, password: password! });
+    if (!error && data.user) identity = await lookupIdentity(data.user.id);
   }
-
-  // Generate tokens (supabaseToken/code ficam no servidor via jti ‐ nunca no JWT)
-  const jti = registerJtiSession(supabaseToken, userCode);
-  const accessToken = signJWT({ role, name: userName, jti }, 24 * 60 * 60); // 24h
-  const refreshToken = crypto.randomBytes(32).toString("hex");
-  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-
-  refreshSessions.set(refreshToken, {
-    role,
-    code: userCode,
-    name: userName,
-    supabaseToken,
-    expiresAt: Date.now() + sevenDaysMs,
-    createdAt: Date.now()
-  });
-  persistSessions();
-
-  res.cookie("access_token", accessToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 24 * 60 * 60 * 1000
-  });
-
-  res.cookie("refresh_token", refreshToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: sevenDaysMs
-  });
-
-  const publicUser: any = { role, code: userCode, name: userName };
-  if (role === "support") publicUser.mustChangePassword = !!supportMustChange;
-  res.json({
-    success: true,
-    user: publicUser,
-    token: accessToken
-  });
-});
-
-app.post("/api/auth/logout", (req, res) => {
-  const refreshToken = req.cookies.refresh_token;
-  if (refreshToken) {
-    refreshSessions.delete(refreshToken);
+  if (!identity) {
+    return res.status(401).json({ error: "Credenciais inválidas ou acesso não permitido." });
   }
-  // Revoga o access token emitido: o jti entra na lista de revogados e sai do
-  // mapa de sessões ‐ o JWT (stateless) deixa de ser aceito nas rotas autenticadas.
-  // Aceita cookie OU Authorization header (mesmo fallback do authenticateUser).
-  let accessToken = req.cookies.access_token;
-  if (!accessToken && req.headers.authorization) {
-    const parts = String(req.headers.authorization).split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") accessToken = parts[1];
+  try {
+    setSessionCookies(res, await sessions.create(identity));
+  } catch (error) {
+    if (error instanceof DuplicateDISessionError) return res.status(409).json({ error: error.message });
+    throw error;
   }
-  if (accessToken) {
-    const decoded = verifyJWT(accessToken);
-    if (decoded?.jti) {
-      revokedJtis.add(decoded.jti);
-      jtiSessions.delete(decoded.jti);
-    }
-  }
-  persistSessions();
-  persistJtiSessions();
-  res.clearCookie("access_token", { path: "/" });
-  res.clearCookie("refresh_token", { path: "/" });
+  dbService.recordAuditLog(identity.code, code ? "LOGIN_RESTRITO_DI" : "LOGIN_SISTEMA", "Acesso autenticado ao sistema.").catch(() => {});
+  if (identity.role === 'user') void recordMetric({ kind: 'login', actor: identity.code });
+  res.json({ success: true, user: publicIdentity(identity) });
+}));
+app.post("/api/auth/logout", (req: any, res) => {
+  sessions.logout(req.cookies?.access_token, req.cookies?.refresh_token);
+  clearSessionCookies(res);
   res.json({ success: true, message: "Sessão encerrada com sucesso." });
 });
-
-// Para role "support", resolve o e-mail (via id da conta Supabase) e inclui a
-// flag de "definir a própria senha" no payload retornado ao client (/me).
-async function enrichSupportUser(user: any): Promise<any> {
-  if (!user || user.role !== "support" || typeof user.code !== "string") return user;
-  try {
-    const trusted = getSupabaseTrustedClient();
-    if (trusted) {
-      const { data } = await trusted.auth.admin.getUserById(user.code).catch(() => ({ data: null }));
-      const email = data?.user?.email;
-      if (email) {
-        const su = await dbService.getSupportUserByEmail(email);
-        return { ...user, mustChangePassword: su?.mustChangePassword === true };
-      }
-    }
-  } catch {
-    /* mantém apenas os dados base */
-  }
-  return user;
-}
-
-app.get("/api/auth/me", async (req: any, res) => {
-  let accessToken = req.cookies.access_token;
-
-  // Fallback to Authorization Header (important for iframe/third-party cookie blocking)
-  if (!accessToken && req.headers.authorization) {
-    const parts = req.headers.authorization.split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") {
-      accessToken = parts[1];
-    }
-  }
-
-  if (!accessToken) {
-    const refreshed = handleRefreshFlow(req, res);
-    if (refreshed) {
-      return res.json({ loggedIn: true, user: await enrichSupportUser(refreshed) });
-    }
-    return res.json({ loggedIn: false });
-  }
-
-  let decoded = verifyJWT(accessToken);
-  if (decoded && decoded.jti && revokedJtis.has(decoded.jti)) decoded = null;
-  if (!decoded) {
-    const refreshed = handleRefreshFlow(req, res);
-    if (refreshed) {
-      return res.json({ loggedIn: true, user: await enrichSupportUser(refreshed) });
-    }
-    return res.json({ loggedIn: false });
-  }
-
-  // Nunca expõe supabaseToken/jti ao cliente ‐ identidade (code resolvido no servidor via jti)
-  const session = getJtiSession(decoded.jti);
-  const baseUser = { role: decoded.role, code: session?.code, name: decoded.name || "" };
-  res.json({ loggedIn: true, user: await enrichSupportUser(baseUser) });
-});
+app.get("/api/auth/me", asyncHandler(async (req: any, res) => {
+  const user = await resolveUser(req, res);
+  res.json(user ? { loggedIn: true, user: publicIdentity(user) } : { loggedIn: false });
+}));
 
 // 2. Fetch Public Content & Teaser Data
-app.get("/api/content/public", async (req, res) => {
+app.post('/api/content/client-error', asyncHandler(authenticateUser), (req, res) => {
+  const { code, area } = req.body || {};
+  if (!['JAVASCRIPT_ERROR','UNHANDLED_PROMISE'].includes(code) || !['Administração','Suporte','Site'].includes(area)) {
+    return res.status(400).end();
+  }
+  reportSystemError('Navegador', code, `Falha de execução relatada pelo navegador na área: ${area}.`, area);
+  res.status(204).end();
+});
+
+app.get("/api/content/public", asyncHandler(async (req, res) => {
   try {
-    const data = await cacheJsonResponse("content/public", 20000, async () => {
-      const dbData = await dbService.getData(undefined, true);
-      const categorias = await dbService.getCategoriasMateriais(undefined, true);
+    const homeOnly = req.query.scope === 'home';
+    const data = await cacheJsonResponse(homeOnly ? "content/home" : "content/public", 300000, async () => {
+      const dbData = await dbService.getData(undefined, true, homeOnly ? 'home' : 'public');
+      const categorias = dbData.categoriasMateriais;
       return JSON.stringify({
       leaderBio: dbData.leaderBio,
       novidades: dbData.novidades,
@@ -1260,7 +681,7 @@ app.get("/api/content/public", async (req, res) => {
         descricao: c.descricao,
         categoria: c.categoria,
         nivel: c.nivel,
-        imagem: c.imagem,
+        imagem: courseCoverPath(c.id),
         duracao: c.duracao,
         moduloCount: c.modulos.length,
         professorNome: c.professorNome,
@@ -1285,9 +706,11 @@ app.get("/api/content/public", async (req, res) => {
       categoriasMateriais: categorias,
       logoUrl: dbData.logoUrl,
       hiddenHomeCardIds: dbData.hiddenHomeCardIds || [],
-      paginaTecnologias: dbData.paginaTecnologias || [],
-      paginaElite: dbData.paginaElite || [],
-      paginaBiografia: dbData.paginaBiografia || []
+      ...(homeOnly ? {} : {
+        paginaTecnologias: dbData.paginaTecnologias || [],
+        paginaElite: dbData.paginaElite || [],
+        paginaBiografia: dbData.paginaBiografia || []
+      })
       });
     });
     res.type("application/json").send(data);
@@ -1295,15 +718,30 @@ app.get("/api/content/public", async (req, res) => {
     console.error("Erro ao carregar conteúdo público:", err);
     res.status(500).json({ error: "Falha ao processar requisição." });
   }
-});
+}));
 
 // 3. Fetch Restricted Content (Exige Login)
-app.get("/api/content/restricted", authenticateUser, async (req: any, res) => {
+app.get('/api/content/page/:page', asyncHandler(async (req, res) => {
+  const keys: Record<string, string> = { tecnologias: 'paginaTecnologias', elite: 'paginaElite', biografia: 'paginaBiografia' };
+  const key = Object.hasOwn(keys, req.params.page) ? keys[req.params.page] : undefined;
+  if (!key) return res.status(404).end();
+  const data = await cacheJsonResponse(`page/${key}`, 300000, async () => {
+    const client = getSupabaseTrustedClient();
+    if (!client) throw new Error('Conteúdo indisponível.');
+    const { data, error } = await client.from('config').select('value').eq('key', key)
+      .abortSignal(AbortSignal.timeout(8000)).maybeSingle();
+    if (error) throw error;
+    return JSON.stringify({ blocos: Array.isArray(data?.value) ? data.value : [] });
+  });
+  res.type('application/json').send(data);
+}));
+
+app.get("/api/content/restricted", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const dbData = await dbService.getData(req.user?.supabaseToken, true);
-    const categorias = await dbService.getCategoriasMateriais(req.user?.supabaseToken, true);
+    const categorias = dbData.categoriasMateriais;
     res.json({
-      cursos: dbData.cursos,
+      cursos: dbData.cursos.map(c => ({ ...c, imagem: courseCoverPath(c.id) })),
       materiais: dbData.materiais,
       categoriasMateriais: categorias,
       logoUrl: dbData.logoUrl
@@ -1312,21 +750,47 @@ app.get("/api/content/restricted", authenticateUser, async (req: any, res) => {
     console.error("Erro ao carregar conteúdo restrito:", err);
     res.status(500).json({ error: "Falha ao processar requisição." });
   }
-});
+}));
 
 // 4. Download Material Increment & Endpoint
+app.get('/api/content/course-cover/:id', asyncHandler(async (req, res) => {
+  try {
+    const image = await cacheJsonResponse(`cover/${req.params.id}`, 60000, async () => {
+      const client = getSupabaseTrustedClient();
+      if (!client) throw Object.assign(new Error('Storage indisponível.'), { coverStatus: 503 });
+      const { data, error } = await client.from('cursos').select('modulos').eq('id', req.params.id)
+        .abortSignal(AbortSignal.timeout(5000)).maybeSingle();
+      if (error) throw Object.assign(new Error('Conteúdo indisponível.'), { coverStatus: 503 });
+      const video = data && firstVimeoVideo(data.modulos);
+      if (!video) throw Object.assign(new Error('Capa não encontrada.'), { coverStatus: 404 });
+      const config = await dbService.getVimeoConfig();
+      return currentVimeoCover(video, config.accessToken?.trim() || '');
+    });
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    res.redirect(302, image);
+  } catch (error) {
+    if ((error as any)?.coverStatus) return res.status((error as any).coverStatus).end();
+    reportSystemError('Vimeo', 'COVER_FAILED', 'Não foi possível obter uma capa de curso ou treinamento no Vimeo.');
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(502).end();
+  }
+}));
+
 // Entrega o arquivo real do material (Supabase Storage) apenas para sessão
-// válida ‐ o fetch do client envia cookie httpOnly OU o Bearer do localStorage
-// (o mesmo fallback do authenticateUser). MIME determinada no servidor; o
+// válida, enviada pelo cliente em cookie httpOnly. MIME determinada no servidor; o
 // download é sempre attachment.
-app.post("/api/content/download/:id", authenticateUser, async (req: any, res) => {
+app.post("/api/content/download/:id", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const material = await dbService.getMaterialById(id, req.user?.supabaseToken);
     if (!material || !material.fileUrl) {
       return res.status(404).json({ error: "Material não encontrado." });
     }
-    await dbService.recordDownload(id, req.user?.supabaseToken);
+    res.once('finish', () => {
+      if (res.statusCode === 200 && req.user?.role === 'user') {
+        void recordMetric({ kind: 'download', actor: req.user.code, entity_id: id, detail: { title: material.titulo } });
+      }
+    });
 
     const safeTitulo = String(material.titulo || "material").replace(/[\r\n"]/g, "_");
     const fileUrl = material.fileUrl;
@@ -1334,7 +798,7 @@ app.post("/api/content/download/:id", authenticateUser, async (req: any, res) =>
     try {
       if (fileUrl.startsWith("/api/storage/") && (fileUrl.includes("/preview/") || fileUrl.includes("/stream/"))) {
         const objectKey = decodeURIComponent(fileUrl.replace(/^\/api\/storage\/(preview|stream)\//, ""));
-        if (objectKey.length > 500 || objectKey.includes("..") || objectKey.includes("\\")) {
+        if (!objectKey) {
           return res.status(404).json({ error: "Arquivo não encontrado." });
         }
         const client = getActiveStorageClient();
@@ -1346,8 +810,8 @@ app.post("/api/content/download/:id", authenticateUser, async (req: any, res) =>
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
         res.setHeader("Content-Length", String(stat.size));
-        const stream = await client.getObject(STORAGE_BUCKET, objectKey);
-        stream.pipe(res);
+        const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res));
+        pipeMedia(stream, res);
       } else {
         return res.status(400).json({ error: "Material sem arquivo válido." });
       }
@@ -1357,10 +821,10 @@ app.post("/api/content/download/:id", authenticateUser, async (req: any, res) =>
   } catch (err: any) {
     res.status(500).json({ error: "Falha ao processar download." });
   }
-});
+}));
 
 // 4.1 Admin Material Categories Endpoint
-app.post("/api/admin/categorias-materiais", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/categorias-materiais", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { categorias } = req.body;
     if (!categorias || !Array.isArray(categorias)) {
@@ -1372,12 +836,12 @@ app.post("/api/admin/categorias-materiais", requireAdmin, async (req: any, res) 
   } catch (err: any) {
     res.status(500).json({ error: "Falha ao salvar categorias." });
   }
-});
+}));
 
 // ---------------- ADMIN CRUD ENDPOINTS ----------------
 
 // Banners da página inicial CRUD
-app.post("/api/admin/banners", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/banners", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const {
       id,
@@ -1424,14 +888,12 @@ app.post("/api/admin/banners", requireAdmin, async (req: any, res) => {
     console.error("Erro ao salvar banner:", err);
     res.status(500).json({ error: "Erro ao salvar banner." });
   }
-});
+}));
 
-app.delete("/api/admin/banners/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/banners/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     let item: Banner | undefined;
     try {
       item = (await dbService.getBanners(req.user?.supabaseToken)).find((b: Banner) => b.id === id);
@@ -1448,17 +910,16 @@ app.delete("/api/admin/banners/:id", requireAdmin, async (req: any, res) => {
     res.json({
       success: true,
       message: "Banner removido.",
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome },
       midias
     });
   } catch (err: any) {
     console.error("Erro ao deletar banner:", err);
     res.status(500).json({ error: "Erro ao deletar banner." });
   }
-});
+}));
 
 // Hidden Home Cards Admin Route
-app.post("/api/admin/hidden-home-cards", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/hidden-home-cards", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { hiddenHomeCardIds } = req.body;
     if (!Array.isArray(hiddenHomeCardIds)) {
@@ -1469,13 +930,13 @@ app.post("/api/admin/hidden-home-cards", requireAdmin, async (req: any, res) => 
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar cards ocultos da tela inicial." });
   }
-});
+}));
 
 // 5. Novidades CRUD
-app.post("/api/admin/novidades", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/novidades", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id, titulo, descricao, categoria, imagem, isPremium, isFeatured, linkType, linkTarget } = req.body;
-    if (!titulo || !descricao || !categoria || !imagem) {
+    if (!titulo || !descricao || !categoria) {
       return res.status(400).json({ error: "Campos obrigatórios ausentes." });
     }
 
@@ -1497,14 +958,12 @@ app.post("/api/admin/novidades", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar novidade." });
   }
-});
+}));
 
-app.delete("/api/admin/novidades/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/novidades/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     let item: Novidade | undefined;
     try {
       item = (await dbService.getNovidades(req.user?.supabaseToken)).find((n: Novidade) => n.id === id);
@@ -1521,17 +980,16 @@ app.delete("/api/admin/novidades/:id", requireAdmin, async (req: any, res) => {
     res.json({
       success: true,
       message: "Novidade removida.",
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome },
       midias
     });
   } catch (err: any) {
     console.error("Erro ao remover novidade:", err);
     res.status(500).json({ error: "Erro ao remover novidade." });
   }
-});
+}));
 
 // 6. Cursos CRUD
-app.post("/api/admin/cursos", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/cursos", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id, titulo, descricao, categoria, nivel, imagem, duracao, modulos, professorNome, professorEspecialidade, professorBio, professorFoto, secao, createdAt } = req.body;
     if (!titulo || !descricao || !categoria || !imagem) {
@@ -1573,13 +1031,14 @@ app.post("/api/admin/cursos", requireAdmin, async (req: any, res) => {
       }))
     }));
 
+    const courseId = id || `c-${Date.now()}`;
     const item: Curso = {
-      id: id || `c-${Date.now()}`,
+      id: courseId,
       titulo: cleanText(titulo),
       descricao: cleanText(descricao),
       categoria: cleanText(categoria),
       nivel: cleanText(nivel) || "Iniciante",
-      imagem: safeLinkTarget(imagem),
+      imagem: courseCoverPath(courseId),
       duracao: cleanText(duracao) || "0h",
       modulos: sanitizedModulos,
       professorNome: cleanText(professorNome),
@@ -1595,14 +1054,12 @@ createdAt: createdAt || new Date().toISOString(),
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar curso." });
   }
-});
+}));
 
-app.delete("/api/admin/cursos/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/cursos/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     let item: Curso | undefined;
     try {
       item = (await dbService.getCursos(req.user?.supabaseToken)).find((c: Curso) => c.id === id);
@@ -1619,14 +1076,13 @@ app.delete("/api/admin/cursos/:id", requireAdmin, async (req: any, res) => {
     res.json({
       success: true,
       message: "Curso removido.",
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome },
       midias
     });
   } catch (err: any) {
     console.error("Erro ao remover curso:", err);
     res.status(500).json({ error: "Erro ao remover curso." });
   }
-});
+}));
 
 // 7. Materiais CRUD
 // fileUrl de materiais é servido como link de download ‐ aceita SOMENTE caminhos
@@ -1638,7 +1094,7 @@ function isSafeMaterialFileUrl(value: string): boolean {
   );
 }
 
-app.post("/api/admin/materiais", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/materiais", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id, titulo, tipo, categoria, thumbnail, fileUrl, isPublic } = req.body;
     if (!titulo || !tipo || !categoria || !thumbnail || !fileUrl) {
@@ -1667,14 +1123,12 @@ app.post("/api/admin/materiais", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar material." });
   }
-});
+}));
 
-app.delete("/api/admin/materiais/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/materiais/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     let item: Material | undefined;
     try {
       item = (await dbService.getMateriais(req.user?.supabaseToken)).find((m: Material) => m.id === id);
@@ -1691,17 +1145,16 @@ app.delete("/api/admin/materiais/:id", requireAdmin, async (req: any, res) => {
     res.json({
       success: true,
       message: "Material removido.",
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome },
       midias
     });
   } catch (err: any) {
     console.error("Erro ao remover material:", err);
     res.status(500).json({ error: "Erro ao remover material." });
   }
-});
+}));
 
 // 8. Leader Bio Update
-app.post("/api/admin/leader-bio", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/leader-bio", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const rawBio: LeaderBio = req.body || {};
     if (!rawBio.nome || !rawBio.cargo || !rawBio.bio) {
@@ -1735,10 +1188,10 @@ app.post("/api/admin/leader-bio", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao atualizar Bio." });
   }
-});
+}));
 
 // 8.1. Tecnologias Update
-app.post("/api/admin/tecnologias", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/tecnologias", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { tecnologias } = req.body;
     if (!Array.isArray(tecnologias)) {
@@ -1755,10 +1208,10 @@ app.post("/api/admin/tecnologias", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao atualizar Tecnologias." });
   }
-});
+}));
 
 // 8.1.1. Páginas institucionais editáveis (Grupo Fênix / Tecnologias / Elite Milionária)
-app.post("/api/admin/paginas", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/paginas", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
 const { chave, blocos } = req.body;
     if (chave !== "paginaTecnologias" && chave !== "paginaElite" && chave !== "paginaBiografia") {
@@ -1789,12 +1242,12 @@ const cleanBlocosFinal = cleanBlocos.map((bloco: any) => ({
     console.error("Erro ao salvar página:", err);
     res.status(500).json({ error: "Erro ao salvar página." });
   }
-});
+}));
 
 // 8.1. Logo Upload & Reset
 // Segurança: somente PNG REAL (data URI image/png + magic bytes). SVG (mesmo com
 // type "image/svg+xml") carrega <script> executável no contexto do site ‐ rejeitado.
-app.post("/api/admin/logo", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/logo", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   const { logoBase64 } = req.body;
   if (!logoBase64 || typeof logoBase64 !== "string") {
     return res.status(400).json({ error: "Nenhuma imagem fornecida." });
@@ -1824,19 +1277,19 @@ app.post("/api/admin/logo", requireAdmin, async (req: any, res) => {
     console.error("Erro ao salvar logo:", err);
     res.status(500).json({ error: "Falha ao processar e salvar a imagem da logo." });
   }
-});
+}));
 
-app.post("/api/admin/logo/reset", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/logo/reset", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     await dbService.updateLogoUrl(undefined, req.user.role, req.user?.supabaseToken);
     res.json({ success: true, logoUrl: undefined });
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao resetar logo." });
   }
-});
+}));
 
 // 8.2 Generic File Upload with Storage folder support
-app.post("/api/admin/upload-file", uploadRateLimiter, requireAdmin, async (req: any, res) => {
+app.post("/api/admin/upload-file", uploadRateLimiter, asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   const { fileBase64, fileName, folder } = req.body;
   if (!fileBase64) {
     return res.status(400).json({ error: "Nenhum arquivo fornecido." });
@@ -1910,7 +1363,7 @@ app.post("/api/admin/upload-file", uploadRateLimiter, requireAdmin, async (req: 
     console.error("Erro no upload de arquivo:", err);
     res.status(500).json({ error: "Falha ao salvar o arquivo." });
   }
-});
+}));
 
 // Detecção de tipo REAL do arquivo pelos magic bytes (o MIME declarado pelo
 // cliente é spoofável). Retorna null para conteúdo desconhecido/corrompido.
@@ -1989,32 +1442,32 @@ function maskEmail(email: string): string {
 // ---------------- FENIX SOCIAL MODULE ENDPOINTS ----------------
 
 // Get approved public feed
-app.get("/api/fenix-social/posts", async (req, res) => {
+app.get("/api/fenix-social/posts", asyncHandler(async (req, res) => {
   try {
     const data = await cacheJsonResponse("fenix-social/posts", 30000, async () => {
       const posts = await dbService.getPublicFenixPosts();
-      return JSON.stringify({ posts });
+      return JSON.stringify({ posts: posts.map(publicPost) });
     });
     res.type("application/json").send(data);
   } catch (err) {
     console.error("Erro ao buscar feed do Fenix Social:", err);
     res.status(500).json({ error: "Falha ao carregar publicações." });
   }
-});
+}));
 
 // Get single post by ID (for direct sharing links)
-app.get("/api/fenix-social/post/:id", async (req, res) => {
+app.get("/api/fenix-social/post/:id", asyncHandler(async (req, res) => {
   try {
     const { id } = req.params;
     const post = await dbService.getFenixPostById(id);
     if (!post) {
       return res.status(404).json({ error: "Publicação não encontrada." });
     }
-    res.json({ post });
+    res.json({ post: publicPost(post) });
   } catch (err) {
     res.status(500).json({ error: "Erro ao buscar publicação." });
   }
-});
+}));
 
 // Helper for saving base64 files directly to Supabase Storage (fenix_social folder)
 async function saveBase64MediaFile(fileBase64: string): Promise<{ url: string; isVideo: boolean; error?: string }> {
@@ -2082,7 +1535,7 @@ async function saveBase64MediaFile(fileBase64: string): Promise<{ url: string; i
 }
 
 // Create new post (Restricted strictly to logged-in users)
-app.post("/api/fenix-social/posts", fenixSocialPostRateLimiter, authenticateUser, async (req: any, res) => {
+app.post("/api/fenix-social/posts", fenixSocialPostRateLimiter, asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const { titulo, legenda, dataPublicacao, usuarioNome, filesBase64, fileBase64 } = req.body;
 
@@ -2090,6 +1543,7 @@ app.post("/api/fenix-social/posts", fenixSocialPostRateLimiter, authenticateUser
       ? filesBase64 
       : (fileBase64 ? [fileBase64] : []);
 
+    if (rawFiles.length > 3) return res.status(400).json({ error: "Envie no máximo 3 arquivos." });
     if (rawFiles.length === 0) {
       return res.status(400).json({ error: "Envie ao menos 1 foto ou vídeo." });
     }
@@ -2154,13 +1608,14 @@ app.post("/api/fenix-social/posts", fenixSocialPostRateLimiter, authenticateUser
     console.error("Erro ao criar post Fênix:", err);
     res.status(500).json({ error: "Erro interno ao processar a publicação." });
   }
-});
+}));
 
 // Like post
-app.post("/api/fenix-social/posts/:id/like", fenixSocialInteractionRateLimiter, async (req: any, res) => {
+app.post("/api/fenix-social/posts/:id/like", fenixSocialInteractionRateLimiter, asyncHandler(optionalAuthenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
-    const userKey = req.user?.code || req.ip || "anonymous";
+    const userKey = crypto.createHmac("sha256", JWT_SECRET).update(req.user?.code || req.ip || "anonymous").digest("hex");
+    if (!await dbService.getFenixPostById(id)) return res.status(404).json({ error: "Publicação não encontrada." });
     const result = await dbService.likeFenixPost(id, userKey);
     if (!result) {
       return res.status(404).json({ error: "Publicação não encontrada." });
@@ -2169,10 +1624,10 @@ app.post("/api/fenix-social/posts/:id/like", fenixSocialInteractionRateLimiter, 
   } catch (err) {
     res.status(500).json({ error: "Erro ao registrar curtida." });
   }
-});
+}));
 
 // Comment on post
-app.post("/api/fenix-social/posts/:id/comment", fenixSocialInteractionRateLimiter, async (req: any, res) => {
+app.post("/api/fenix-social/posts/:id/comment", fenixSocialInteractionRateLimiter, asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const { texto, usuarioNome } = req.body;
@@ -2184,8 +1639,9 @@ app.post("/api/fenix-social/posts/:id/comment", fenixSocialInteractionRateLimite
     }
 
     const sanitizedTexto = stripTags(texto);
-    const sanitizedNome = usuarioNome ? stripTags(usuarioNome) : (req.user?.code === "admin" ? "Administrador Fênix" : "Membro Fênix");
+    const sanitizedNome = req.user ? stripTags(req.user.name) : "Visitante";
 
+    if (!await dbService.getFenixPostById(id)) return res.status(404).json({ error: "Publicação não encontrada." });
     const comment = await dbService.commentFenixPost(id, sanitizedTexto, sanitizedNome);
     if (!comment) {
       return res.status(404).json({ error: "Publicação não encontrada." });
@@ -2195,10 +1651,10 @@ app.post("/api/fenix-social/posts/:id/comment", fenixSocialInteractionRateLimite
   } catch (err) {
     res.status(500).json({ error: "Erro ao publicar comentário." });
   }
-});
+}));
 
 // Moderation feed (Requires Admin OR valid Moderator Token)
-app.get("/api/fenix-social/moderacao", fenixModeracaoRateLimiter, optionalAuthenticateUser, async (req: any, res) => {
+app.get("/api/fenix-social/moderacao", fenixModeracaoRateLimiter, asyncHandler(optionalAuthenticateUser), asyncHandler(async (req: any, res) => {
   try {
     // Token do moderador SOMENTE via header (nunca na URL ‐ evita vazamento
     // em logs/referrers/histórico).
@@ -2216,15 +1672,16 @@ app.get("/api/fenix-social/moderacao", fenixModeracaoRateLimiter, optionalAuthen
       return res.status(403).json({ error: "Acesso negado à moderação." });
     }
 
+    if (typeof token === "string") res.cookie("moderator_media", token, { httpOnly: true, secure: isProduction, sameSite: "strict", path: "/api/storage", maxAge: 15 * 60 * 1000 });
     const posts = await dbService.getPendingFenixPosts();
     res.json({ posts });
   } catch (err) {
     res.status(500).json({ error: "Erro ao carregar posts pendentes para moderação." });
   }
-});
+}));
 
 // Moderation approve
-app.post("/api/fenix-social/moderacao/:id/aprovar", fenixModeracaoRateLimiter, optionalAuthenticateUser, async (req: any, res) => {
+app.post("/api/fenix-social/moderacao/:id/aprovar", fenixModeracaoRateLimiter, asyncHandler(optionalAuthenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const token = req.headers["x-moderator-token"];
@@ -2245,10 +1702,10 @@ app.post("/api/fenix-social/moderacao/:id/aprovar", fenixModeracaoRateLimiter, o
   } catch (err) {
     res.status(500).json({ error: "Erro ao aprovar publicação." });
   }
-});
+}));
 
 // Moderation reject (Hard Delete)
-app.post("/api/fenix-social/moderacao/:id/recusar", fenixModeracaoRateLimiter, optionalAuthenticateUser, async (req: any, res) => {
+app.post("/api/fenix-social/moderacao/:id/recusar", fenixModeracaoRateLimiter, asyncHandler(optionalAuthenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const token = req.headers["x-moderator-token"];
@@ -2291,22 +1748,22 @@ app.post("/api/fenix-social/moderacao/:id/recusar", fenixModeracaoRateLimiter, o
     console.error("[Moderação Fênix] Erro ao recusar:", err);
     res.status(500).json({ error: "Erro ao recusar publicação." });
   }
-});
+}));
 
 // --- ADMIN MANAGEMENT ENDPOINTS FOR FENIX SOCIAL ---
 
 // Get ALL posts (Approved, Pending, Rejected) for Admin
-app.get("/api/fenix-social/admin/all-posts", requireAdmin, async (req: any, res) => {
+app.get("/api/fenix-social/admin/all-posts", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const posts = await dbService.getAllFenixPosts(req.token);
     res.json({ posts });
   } catch (err) {
     res.status(500).json({ error: "Erro ao carregar todas as publicações para administração." });
   }
-});
+}));
 
 // Edit post in Admin Panel
-app.put("/api/fenix-social/admin/posts/:id", requireAdmin, async (req: any, res) => {
+app.put("/api/fenix-social/admin/posts/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const { titulo, legenda, status, dataPublicacao, usuarioNome } = req.body;
@@ -2327,15 +1784,13 @@ app.put("/api/fenix-social/admin/posts/:id", requireAdmin, async (req: any, res)
   } catch (err) {
     res.status(500).json({ error: "Erro ao atualizar publicação." });
   }
-});
+}));
 
 // Delete post in Admin Panel (Hard delete files & DB entry)
-app.delete("/api/fenix-social/admin/posts/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/fenix-social/admin/posts/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     let post: FenixPost | null = null;
     try {
       post = await dbService.getFenixPostById(id, req.user?.supabaseToken);
@@ -2372,26 +1827,25 @@ app.delete("/api/fenix-social/admin/posts/:id", requireAdmin, async (req: any, r
     res.json({
       success: true,
       message: "Publicação e arquivos excluídos com sucesso.",
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome },
       midias
     });
   } catch (err) {
     res.status(500).json({ error: "Erro ao excluir publicação." });
   }
-});
+}));
 
 // Get Moderator Links
-app.get("/api/fenix-social/admin/moderator-links", requireAdmin, async (req: any, res) => {
+app.get("/api/fenix-social/admin/moderator-links", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const links = await dbService.getModeratorLinks(req.user?.supabaseToken);
     res.json({ links });
   } catch (err) {
     res.status(500).json({ error: "Erro ao listar links de moderadores." });
   }
-});
+}));
 
 // Create Moderator Link
-app.post("/api/fenix-social/admin/moderator-links", requireAdmin, async (req: any, res) => {
+app.post("/api/fenix-social/admin/moderator-links", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { moderadorNome } = req.body;
     if (!moderadorNome || !moderadorNome.trim()) {
@@ -2403,27 +1857,24 @@ app.post("/api/fenix-social/admin/moderator-links", requireAdmin, async (req: an
   } catch (err) {
     res.status(500).json({ error: "Erro ao criar link de moderador." });
   }
-});
+}));
 
 // Delete Moderator Link
-app.delete("/api/fenix-social/admin/moderator-links/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/fenix-social/admin/moderator-links/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const geradoPor = req.user?.code || "admin";
-    // Regra A: backup automático do estado atual antes de excluir (máx. 1 por 10 min)
-    const protecao = await ensureDeleteProtection({ geradoPor, userToken: req.user?.supabaseToken });
     const success = await dbService.deleteModeratorLink(id, geradoPor, req.user?.supabaseToken);
     if (!success) {
       return res.status(404).json({ error: "Link de moderador não encontrado." });
     }
     res.json({
       success: true,
-      protecao: { backupCriado: protecao.backupCriado, backupNome: protecao.backupNome }
     });
   } catch (err) {
     res.status(500).json({ error: "Erro ao excluir link de moderador." });
   }
-});
+}));
 
 // Rate limiter store for Ouvidoria: IP => { count: number, resetAt: number }
 const ouvidoriaRateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -2450,7 +1901,7 @@ function checkOuvidoriaRateLimit(ip: string): boolean {
 // --- OUVIDORIA ENDPOINTS ---
 
 // Public submission
-app.post("/api/ouvidoria/submit", ouvidoriaRateLimiter, async (req: any, res) => {
+app.post("/api/ouvidoria/submit", ouvidoriaRateLimiter, asyncHandler(async (req: any, res) => {
   try {
     // IP REAL via req.ip (respeita o trust proxy configurado) ‐ o header
     // X-Forwarded-For é ignorado aqui (spoofável por qualquer cliente).
@@ -2585,10 +2036,10 @@ app.post("/api/ouvidoria/submit", ouvidoriaRateLimiter, async (req: any, res) =>
     console.error("Erro ao processar mensagem de ouvidoria:", err);
     res.status(500).json({ error: "Ocorreu um erro interno ao processar sua mensagem. Tente novamente." });
   }
-});
+}));
 
 // Admin list messages
-app.get("/api/admin/ouvidoria/messages", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/ouvidoria/messages", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { tipo, status, search } = req.query;
     const messages = await dbService.getOuvidoriaMessages(
@@ -2605,10 +2056,10 @@ app.get("/api/admin/ouvidoria/messages", requireAdmin, async (req: any, res) => 
   } catch (err) {
     res.status(500).json({ error: "Erro ao buscar mensagens da ouvidoria." });
   }
-});
+}));
 
 // Admin update status
-app.put("/api/admin/ouvidoria/messages/:id/status", requireAdmin, async (req: any, res) => {
+app.put("/api/admin/ouvidoria/messages/:id/status", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -2625,10 +2076,10 @@ app.put("/api/admin/ouvidoria/messages/:id/status", requireAdmin, async (req: an
   } catch (err) {
     res.status(500).json({ error: "Erro ao atualizar status da mensagem." });
   }
-});
+}));
 
 // Admin delete message
-app.delete("/api/admin/ouvidoria/messages/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/ouvidoria/messages/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const success = await dbService.deleteOuvidoriaMessage(id, req.user?.code || "admin");
@@ -2640,20 +2091,20 @@ app.delete("/api/admin/ouvidoria/messages/:id", requireAdmin, async (req: any, r
   } catch (err) {
     res.status(500).json({ error: "Erro ao excluir mensagem." });
   }
-});
+}));
 
 // Admin get config
-app.get("/api/admin/ouvidoria/config", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/ouvidoria/config", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const config = await dbService.getOuvidoriaConfig();
     res.json(config);
   } catch (err) {
     res.status(500).json({ error: "Erro ao obter configurações da ouvidoria." });
   }
-});
+}));
 
 // Admin update config
-app.post("/api/admin/ouvidoria/config", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/ouvidoria/config", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { emailSuporte, emailParcerias, autoResponderEnabled } = req.body;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -2678,10 +2129,10 @@ app.post("/api/admin/ouvidoria/config", requireAdmin, async (req: any, res) => {
   } catch (err) {
     res.status(500).json({ error: "Erro ao atualizar configurações da ouvidoria." });
   }
-});
+}));
 
 // Admin export CSV
-app.get("/api/admin/ouvidoria/export", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/ouvidoria/export", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const messages = await dbService.getOuvidoriaMessages();
 
@@ -2699,80 +2150,39 @@ app.get("/api/admin/ouvidoria/export", requireAdmin, async (req: any, res) => {
   } catch (err) {
     res.status(500).json({ error: "Erro ao exportar relatório CSV." });
   }
-});
+}));
 
 // 9. Audit Logs & Stats (Admin Dashboard)
-app.get("/api/admin/stats-and-logs", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/metrics", asyncHandler(requireAdmin), asyncHandler(async (req, res) => {
   try {
-    const data = await dbService.getData(req.user?.supabaseToken, true);
-    const auditLogs = data.auditLogs || [];
-
-    const diMap = new Map<string, { codigo: string; count: number; lastAccess: string; status: string }>();
-
-    // Initial base D.I records
-    const baseDIs = [
-      { codigo: "DI-654321", count: 18, lastAccess: new Date(Date.now() - 1000 * 60 * 25).toISOString(), status: "Ativo" },
-      { codigo: "DI-884210", count: 14, lastAccess: new Date(Date.now() - 1000 * 60 * 180).toISOString(), status: "Ativo" },
-      { codigo: "DI-102948", count: 9, lastAccess: new Date(Date.now() - 1000 * 60 * 720).toISOString(), status: "Ativo" },
-      { codigo: "DI-304211", count: 6, lastAccess: new Date(Date.now() - 1000 * 60 * 1440).toISOString(), status: "Ativo" },
-      { codigo: "DI-991024", count: 4, lastAccess: new Date(Date.now() - 1000 * 60 * 2880).toISOString(), status: "Recente" },
-      { codigo: "DI-ADMIN-123456", count: 32, lastAccess: new Date().toISOString(), status: "Ativo (Admin)" },
-    ];
-
-    baseDIs.forEach((item) => diMap.set(item.codigo, { ...item }));
-
-    // Merge actual D.I login entries from audit logs
-    auditLogs.forEach((log) => {
-      if (log.usuario && (log.usuario.startsWith("DI-") || log.acao === "LOGIN_RESTRITO_DI")) {
-        const key = log.usuario.startsWith("DI-") ? log.usuario : `DI-${log.usuario}`;
-        const existing = diMap.get(key) || {
-          codigo: key,
-          count: 0,
-          lastAccess: log.timestamp,
-          status: "Ativo"
-        };
-        existing.count += 1;
-        if (new Date(log.timestamp) > new Date(existing.lastAccess)) {
-          existing.lastAccess = log.timestamp;
-        }
-        diMap.set(key, existing);
-      }
-    });
-
-    const diList = Array.from(diMap.values()).sort((a, b) => b.count - a.count);
-    const totalLoginsDI = diList.reduce((acc, d) => acc + d.count, 0);
-    const totalDownloads = data.materiais.reduce((acc, m) => acc + m.downloads, 0);
-    const totalAcessos = Math.max(148, totalLoginsDI * 3 + auditLogs.length + 50);
-    const totalUsuarios = Math.max(diList.length + 2, 2 + refreshSessions.size);
-
-    res.json({
-      stats: {
-        usuarios: totalUsuarios,
-        cursos: data.cursos.length,
-        materiais: data.materiais.length,
-        downloads: totalDownloads,
-        acessos: totalAcessos,
-        totalLoginsDI
-      },
-      diList,
-      auditLogs
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: "Erro ao carregar estatísticas." });
+    const days = Number(req.query.days || 30);
+    if (![7, 30, 90].includes(days)) return res.status(400).json({ error: "Período inválido." });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await metricsReport(days));
+  } catch (error: any) {
+    res.status(503).json({ error: error.message });
   }
-});
+}));
+
+app.post("/api/content/course-access/:id", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
+  if (req.user.role !== 'user') return res.status(204).end();
+  const course = (await dbService.getCursos(req.user.supabaseToken)).find(c => c.id === req.params.id);
+  if (!course) return res.status(404).json({ error: 'Curso não encontrado.' });
+  await recordMetric({ kind: course.secao === 'treinamentos' ? 'training' : 'course', actor: req.user.code, entity_id: course.id, detail: { title: course.titulo } });
+  res.status(204).end();
+}));
 
 // --- ADMIN D.I. CODE MANAGEMENT ENDPOINTS ---
-app.get("/api/admin/dis", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/dis", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const list = await dbService.getDICodes(req.user?.supabaseToken);
     res.json({ success: true, diCodes: list });
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao buscar códigos D.I." });
   }
-});
+}));
 
-app.post("/api/admin/dis", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/dis", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { codigo, descricao, ativo } = req.body;
     if (!codigo || typeof codigo !== "string" || !codigo.trim()) {
@@ -2787,9 +2197,9 @@ app.post("/api/admin/dis", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao cadastrar código D.I." });
   }
-});
+}));
 
-app.put("/api/admin/dis/:id/toggle", requireAdmin, async (req: any, res) => {
+app.put("/api/admin/dis/:id/toggle", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const adminUser = req.user?.code || "Admin";
@@ -2801,9 +2211,9 @@ app.put("/api/admin/dis/:id/toggle", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao alterar status do código D.I." });
   }
-});
+}));
 
-app.delete("/api/admin/dis/:id", requireAdmin, async (req: any, res) => {
+app.delete("/api/admin/dis/:id", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
     const adminUser = req.user?.code || "Admin";
@@ -2815,7 +2225,7 @@ app.delete("/api/admin/dis/:id", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao excluir código D.I." });
   }
-});
+}));
 
 // --- ADMIN D.I. BULK IMPORT (CSV) ---
 const csvImportMulter = multer({
@@ -2831,7 +2241,7 @@ const csvImportMulter = multer({
   }
 });
 
-app.get("/api/admin/dis/template", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/dis/template", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const content = "\uFEFF" + buildDITemplateCSV();
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -2840,11 +2250,11 @@ app.get("/api/admin/dis/template", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao gerar o modelo CSV." });
   }
-});
+}));
 
 // Export CSV dos D.I.s CADASTRADOS (espelho do modelo de importação:
 // Nome | Código | Papel ‐ papel derivado do prefixo DI-ADMIN-).
-app.get("/api/admin/dis/export-csv", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/dis/export-csv", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const list = await dbService.getDICodes(req.user?.supabaseToken);
     const linhaAtivos = list.filter((d: any) => d.ativo !== false).length;
@@ -2862,9 +2272,9 @@ app.get("/api/admin/dis/export-csv", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao gerar o CSV dos D.I.s cadastrados." });
   }
-});
+}));
 
-app.post("/api/admin/dis/import", uploadRateLimiter, requireAdmin, csvImportMulter.single("file"), async (req: any, res) => {
+app.post("/api/admin/dis/import", uploadRateLimiter, asyncHandler(requireAdmin), csvImportMulter.single("file"), asyncHandler(async (req: any, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "Envie um arquivo .csv." });
@@ -2901,7 +2311,7 @@ app.post("/api/admin/dis/import", uploadRateLimiter, requireAdmin, csvImportMult
     console.error("[D.I. import error]", err);
     res.status(500).json({ error: "Erro ao processar o arquivo D.I." });
   }
-});
+}));
 
 // ---------------- SUPORTE POR TICKETS ----------------
 // Histórico 100% imutável: NÂO existem rotas de exclusão de chamados ou mensagens.
@@ -2918,7 +2328,7 @@ function isSupportStaffRole(role?: string): boolean {
 // Regra de senha das contas de suporte (temporária do admin E definitiva do
 // responsável): mínimo 8 caracteres, com letras e números.
 function isValidSupportPassword(pw: any): boolean {
-  return typeof pw === "string" && pw.length >= 8 && /[a-zA-Z]/.test(pw) && /[0-9]/.test(pw);
+  return typeof pw === "string" && pw.length <= 256 && pw.length >= 8 && /[a-zA-Z]/.test(pw) && /[0-9]/.test(pw);
 }
 const SUPPORT_PASSWORD_HINT = "A senha deve ter no mínimo 8 caracteres, com letras e números.";
 
@@ -2939,7 +2349,7 @@ function publishSupportChange() {
   }
 }
 
-app.get("/api/support/realtime", authenticateUser, async (req: any, res) => {
+app.get("/api/support/realtime", asyncHandler(authenticateUser), concurrencyLimit(2, 100), asyncHandler(async (req: any, res) => {
   // �?rea de suporte exclusiva ‐ admin não participa (nem do fluxo de eventos).
   if (req.user?.role === "admin") {
     return res.status(403).json({ error: "�?rea de suporte restrita ao suporte." });
@@ -2962,9 +2372,9 @@ app.get("/api/support/realtime", authenticateUser, async (req: any, res) => {
     clearInterval(heartbeat);
     sseClients.delete(res);
   });
-});
+}));
 
-app.get("/api/support/tickets", authenticateUser, async (req: any, res) => {
+app.get("/api/support/tickets", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const all = await dbService.getSupportTickets(req.user?.supabaseToken);
     const isStaff = isSupportStaffRole(req.user?.role);
@@ -2984,16 +2394,16 @@ app.get("/api/support/tickets", authenticateUser, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao carregar chamados." });
   }
-});
+}));
 
 // Multer para os anexos do suporte (fotos/documentos no chat): até 5 arquivos
 // de 10MB cada, em memória (as imagens são re-comprimidas com sharp antes de gravar).
 const supportAnexoMulter = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 5 }
+  limits: { fileSize: 10 * 1024 * 1024, files: 5, fields: 8, parts: 13, fieldSize: 20000, fieldNameSize: 100 }
 });
 
-app.post("/api/support/tickets", authenticateUser, supportAnexoMulter.array("files", 5), async (req: any, res) => {
+app.post("/api/support/tickets", uploadRateLimiter, asyncHandler(authenticateUser), uploadConcurrency, supportAnexoMulter.array("files", 5), asyncHandler(async (req: any, res) => {
   try {
     if (req.user?.role !== "user") {
       return res.status(403).json({ error: "Somente membros com código D.I. podem abrir chamados." });
@@ -3029,9 +2439,9 @@ app.post("/api/support/tickets", authenticateUser, supportAnexoMulter.array("fil
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao abrir chamado." });
   }
-});
+}));
 
-app.get("/api/support/tickets/:id", authenticateUser, async (req: any, res) => {
+app.get("/api/support/tickets/:id", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3043,9 +2453,9 @@ app.get("/api/support/tickets/:id", authenticateUser, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao carregar chamado." });
   }
-});
+}));
 
-app.post("/api/support/tickets/:id/mensagens", authenticateUser, async (req: any, res) => {
+app.post("/api/support/tickets/:id/mensagens", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3080,9 +2490,9 @@ app.post("/api/support/tickets/:id/mensagens", authenticateUser, async (req: any
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao enviar mensagem." });
   }
-});
+}));
 
-app.post("/api/support/tickets/:id/status", authenticateUser, async (req: any, res) => {
+app.post("/api/support/tickets/:id/status", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3113,10 +2523,10 @@ app.post("/api/support/tickets/:id/status", authenticateUser, async (req: any, r
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao alterar status do chamado." });
   }
-});
+}));
 
 // D.I. reabre o próprio chamado depois de fechado/resolvido
-app.post("/api/support/tickets/:id/reabrir", authenticateUser, async (req: any, res) => {
+app.post("/api/support/tickets/:id/reabrir", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3145,18 +2555,19 @@ app.post("/api/support/tickets/:id/reabrir", authenticateUser, async (req: any, 
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao reabrir o chamado." });
   }
-});
+}));
 
 // O responsável de suporte troca a PRÏPRIA senha (primeiro acesso ou após
 // redefinição do admin). A senha do Supabase Auth é atualizada pelo próprio id da
 // sessão (req.user.code = id da conta Supabase) e a flag de "troca pendente" é
 // limpa. Nunca se loga a senha.
-app.post("/api/support/change-password", passwordChangeRateLimiter, authenticateUser, async (req: any, res) => {
+app.post("/api/support/change-password", passwordChangeRateLimiter, asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     if (req.user?.role !== "support") {
       return res.status(403).json({ error: "�?rea de suporte restrita ao suporte." });
     }
-    const { novaSenha } = req.body;
+    const { novaSenha, senhaAtual } = req.body;
+    if (typeof senhaAtual !== "string" || !senhaAtual || senhaAtual.length > 256) return res.status(400).json({ error: "Informe sua senha atual." });
     if (!isValidSupportPassword(novaSenha)) {
       return res.status(400).json({ error: SUPPORT_PASSWORD_HINT });
     }
@@ -3166,7 +2577,12 @@ app.post("/api/support/change-password", passwordChangeRateLimiter, authenticate
     }
 
     const trusted = getSupabaseTrustedClient();
+    if (!trusted) throw new Error("Autenticação indisponível.");
     if (trusted) {
+      const { data: existing, error: lookupError } = await trusted.auth.admin.getUserById(String(uid));
+      if (lookupError || !existing.user?.email) throw new Error("Conta indisponível.");
+      const verification = await getSupabaseClient()!.auth.signInWithPassword({ email: existing.user.email, password: senhaAtual });
+      if (verification.error || verification.data.user?.id !== uid) return res.status(401).json({ error: "Senha atual inválida." });
       const { error: updErr } = await trusted.auth.admin.updateUserById(String(uid), { password: novaSenha });
       if (updErr) {
         console.error("[Supabase Auth] Erro ao trocar senha do suporte:", updErr.message);
@@ -3183,15 +2599,19 @@ app.post("/api/support/change-password", passwordChangeRateLimiter, authenticate
       }
     }
 
+    sessions.revokeAccount(String(uid));
+    const currentIdentity = await lookupIdentity(String(uid));
+    if (!currentIdentity) { clearSessionCookies(res); return res.status(401).json({ error: "Faça login novamente." }); }
+    setSessionCookies(res, await sessions.create(currentIdentity));
     res.json({ success: true, message: "Senha atualizada com sucesso." });
   } catch (err: any) {
     console.error("[change-password] erro:", err);
     res.status(500).json({ error: "Erro ao alterar a senha." });
   }
-});
+}));
 
 // Caixa de entrada unificada do staff: chamados + interessados "Quero Fazer Parte" (prioridade; técnico: leads)
-app.get("/api/support/inbox", authenticateUser, async (req: any, res) => {
+app.get("/api/support/inbox", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     if (!isSupportStaffRole(req.user?.role)) {
       return res.status(403).json({ error: "Acesso restrito à equipe de suporte." });
@@ -3223,10 +2643,10 @@ app.get("/api/support/inbox", authenticateUser, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao carregar a caixa de entrada." });
   }
-});
+}));
 
 // Status do interessado "Quero Fazer Parte" (somente staff; técnico: lead)
-app.put("/api/support/ouvidoria/:id/status", authenticateUser, async (req: any, res) => {
+app.put("/api/support/ouvidoria/:id/status", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     if (!isSupportStaffRole(req.user?.role)) {
       return res.status(403).json({ error: "Acesso restrito à equipe de suporte." });
@@ -3244,7 +2664,7 @@ app.put("/api/support/ouvidoria/:id/status", authenticateUser, async (req: any, 
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao atualizar status do contato." });
   }
-});
+}));
 
 // --- ANEXOS DO SUPORTE (fotos/documentos no chat) ---
 // Permitidos: imagens (JPG/PNG/WebP), PDF e Office (doc/docx/xls/xlsx).
@@ -3351,7 +2771,7 @@ async function storeSupportAnexo(
 }
 
 // Anexa arquivos a uma mensagem do chamado (staff responde OU D.I. envia)
-app.post("/api/support/tickets/:id/anexos", uploadRateLimiter, authenticateUser, supportAnexoMulter.array("files", 5), async (req: any, res) => {
+app.post("/api/support/tickets/:id/anexos", uploadRateLimiter, asyncHandler(authenticateUser), uploadConcurrency, supportAnexoMulter.array("files", 5), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3392,11 +2812,11 @@ app.post("/api/support/tickets/:id/anexos", uploadRateLimiter, authenticateUser,
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao anexar arquivos." });
   }
-});
+}));
 
 // Download de anexo ‐ staff OU o D.I. dono do chamado (ambos baixam qualquer
 // arquivo da conversa; quem não é dono e não é staff recebe 403).
-app.get("/api/support/tickets/:id/anexos/:anexoId", authenticateUser, async (req: any, res) => {
+app.get("/api/support/tickets/:id/anexos/:anexoId", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
   try {
     const ticket = await dbService.getSupportTicket(req.params.id, req.user?.supabaseToken);
     if (!ticket) return res.status(404).json({ error: "Chamado não encontrado." });
@@ -3415,405 +2835,16 @@ app.get("/api/support/tickets/:id/anexos/:anexoId", authenticateUser, async (req
     res.setHeader("Content-Type", anexo.mime || "application/octet-stream");
     res.setHeader("Content-Disposition", `attachment; filename="${nome.replace(/"/g, "")}"`);
     const stream = await getActiveStorageClient().getObject(STORAGE_BUCKET, anexo.key);
-    stream.pipe(res);
+    pipeMedia(stream, res);
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao entregar o anexo." });
   }
-});
+}));
 
-// Sanitiza nomes para o objeto no Storage: sem acentos/caracteres especiais
-function sanitizeFilePart(text: string, maxLen = 60): string {
-  const normalized = (text || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return normalized.slice(0, maxLen) || "DI";
-}
 
-function formatDatePart(iso?: string): string {
-  if (!iso) return "sem-data";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return "sem-data";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-// Gera o PDF de um chamado fechado: dados do chamado + conversa completa
-function buildSupportTicketPdf(ticket: any): Buffer {
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const margin = 48;
-  const maxW = pageW - margin * 2;
-  let y = margin;
-
-  const write = (text: string, opts: { size?: number; style?: "normal" | "bold"; color?: number; gap?: number } = {}) => {
-    const size = opts.size || 10;
-    const lines = doc.splitTextToSize(text || "", maxW) as string[];
-    for (const line of lines) {
-      if (y > pageH - margin) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.setFont("helvetica", opts.style || "normal");
-      doc.setFontSize(size);
-      doc.setTextColor(opts.color ?? 40);
-      doc.text(line, margin, y);
-      y += size * 1.35;
-    }
-    if (opts.gap) y += opts.gap;
-  };
-
-  const separator = () => {
-    if (y > pageH - margin - 20) {
-      doc.addPage();
-      y = margin;
-    }
-    doc.setDrawColor(200);
-    doc.line(margin, y, pageW - margin, y);
-    y += 18;
-  };
-
-  // Cabeçalho
-  doc.setFillColor(209, 42, 98);
-  doc.rect(0, 0, pageW, 64, "F");
-  doc.setTextColor(255);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.text("GRUPO FENIX - BACKUP DE SUPORTE", margin, 30);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(`Chamado #${String(ticket.numero || "").padStart(4, "0")} - ${ticket.status || ""}`, margin, 48);
-  y = 96;
-
-  write(`D.I.: ${ticket.criadoPor || ""}`, { size: 12, style: "bold" });
-  write(`Nome: ${ticket.criadoPorNome || ""}`, { size: 12 });
-  write(`Assunto: ${ticket.assunto || ""}`, { size: 11 });
-  write(`Aberto em: ${ticket.criadoEm ? new Date(ticket.criadoEm).toLocaleString("pt-BR") : "-"}`, { size: 10 });
-  write(`Fechado em: ${ticket.fechadoEm ? new Date(ticket.fechadoEm).toLocaleString("pt-BR") : "-"}`, { size: 10 });
-  write(`Fechado por: ${ticket.fechadoPor || "-"}`, { size: 10 });
-  separator();
-
-  write("CONVERSA", { size: 11, style: "bold", gap: 4 });
-  const mensagens = ticket.mensagens || [];
-  if (mensagens.length === 0) {
-    write("(sem mensagens)", { size: 10, color: 130 });
-  }
-  for (const m of mensagens) {
-    const autor = m.tipo === "di"
-      ? (m.autorNome || m.autorRef || "D.I.")
-      : `Suporte - ${m.autorNome || ""}`;
-    const quando = m.criadoEm ? new Date(m.criadoEm).toLocaleString("pt-BR") : "";
-    write(`[${m.tipo === "di" ? "D.I." : "SUPORTE"}] ${autor} - ${quando}`, { size: 9, style: "bold", color: 209 });
-    write(m.texto || "", { size: 10, gap: 6 });
-  }
-
-  return Buffer.from(doc.output("arraybuffer"));
-}
-
-// Gera o PDF de um contato "Quero Fazer Parte"
-function buildQueroFazerPartePdf(lead: any): Buffer {
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const margin = 48;
-  const maxW = pageW - margin * 2;
-  let y = margin;
-
-  const write = (text: string, opts: { size?: number; style?: "normal" | "bold"; color?: number; gap?: number } = {}) => {
-    const size = opts.size || 10;
-    const lines = doc.splitTextToSize(text || "", maxW) as string[];
-    for (const line of lines) {
-      if (y > pageH - margin) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.setFont("helvetica", opts.style || "normal");
-      doc.setFontSize(size);
-      doc.setTextColor(opts.color ?? 40);
-      doc.text(line, margin, y);
-      y += size * 1.35;
-    }
-    if (opts.gap) y += opts.gap;
-  };
-
-  const separator = () => {
-    if (y > pageH - margin - 20) {
-      doc.addPage();
-      y = margin;
-    }
-    doc.setDrawColor(200);
-    doc.line(margin, y, pageW - margin, y);
-    y += 18;
-  };
-
-  // Cabeçalho
-  doc.setFillColor(209, 42, 98);
-  doc.rect(0, 0, pageW, 64, "F");
-  doc.setTextColor(255);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(15);
-  doc.text("GRUPO FENIX - QUERO FAZER PARTE DA EQUIPE", margin, 30);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  const statusLabel = lead.status === "pendente" ? "Pendente (Aguardando contato)" : "Ja contatado";
-  doc.text(`Candidatura para Trabalhar na Equipe - Status: ${statusLabel}`, margin, 48);
-  y = 96;
-
-  write(`Candidato: ${lead.nome || ""}`, { size: 12, style: "bold" });
-  write(`E-mail: ${lead.email || "-"}`, { size: 11 });
-  write(`WhatsApp / Telefone: ${lead.telefone || "-"}`, { size: 11 });
-  const localizacao = [lead.cidade, lead.estado, lead.pais].filter(Boolean).join(" / ");
-  if (localizacao) {
-    write(`Localização: ${localizacao}`, { size: 10 });
-  }
-  write("Objetivo: Trabalhar na equipe do Grupo Fenix", { size: 10 });
-  write(`Recebido em: ${lead.createdAt ? new Date(lead.createdAt).toLocaleString("pt-BR") : "-"}`, { size: 10 });
-  if (lead.contatadoEm) {
-    write(`Contatado em: ${new Date(lead.contatadoEm).toLocaleString("pt-BR")}`, { size: 10 });
-    write(`Contatado por: ${lead.contatadoPor || "-"}`, { size: 10 });
-  }
-  separator();
-
-  write("MENSAGEM / APRESENTAÇÃO DO CANDIDATO", { size: 11, style: "bold", gap: 6 });
-  write(lead.mensagem || "(sem mensagem adicional)", { size: 10, gap: 10 });
-
-  return Buffer.from(doc.output("arraybuffer"));
-}
-
-function getBrasiliaDateStr(d = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-}
-
-function getBrasiliaTimeStr(d = new Date()): string {
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(d);
-}
-
-let ultimoDiaBackupSuporte: string | null = null;
-let backupSuporteEmAndamento = false;
-
-// Rotina oficial de backup do suporte e interessados "Quero Fazer Parte":
-// 1. Chamados de suporte: abertos entram todo dia. No dia em que for fechado, entra com '_ENCERRADO_{data}'.
-//    A partir do dia seguinte ao fechamento, não entra mais no backup.
-// 2. Pedidos "Quero Fazer Parte": pendentes entram todo dia. No dia em que clicar em "Já contatei", entra com '_CONTATADO_{data}'.
-//    A partir do dia seguinte ao contato, não entra mais no backup.
-// Salva individualmente em PDF na pasta do dia do Supabase Storage: backup-suporte/AAAA-MM-DD/
-// Gera também um .zip consolidado com todos os PDFs para download rápido.
-async function executarBackupSuporteDiario(opts: { manual?: boolean; adminRef?: string; userToken?: string } = {}): Promise<{
-  success: boolean;
-  total: number;
-  ticketsAbertos: number;
-  ticketsFechadosHoje: number;
-  leadsPendentes: number;
-  leadsContatadosHoje: number;
-  pasta: string;
-  dataHoje: string;
-  arquivoZip?: string;
-  relZip?: string;
-  tamanhoZipKb?: number;
-}> {
-  if (backupSuporteEmAndamento) {
-    throw new Error("Backup do suporte já está em andamento.");
-  }
-  backupSuporteEmAndamento = true;
-  try {
-    const hoje = getBrasiliaDateStr();
-    const [tickets, allLeads] = await Promise.all([
-      dbService.getSupportTickets(opts.userToken),
-      dbService.getOuvidoriaMessages(undefined, undefined, undefined, opts.userToken)
-    ]);
-    const leads = (allLeads || []).filter((l) => l.tipo === "parceria");
-
-    const incluidos: { tipo: "ticket" | "lead"; data: any; filename: string }[] = [];
-    let countTicketsAbertos = 0;
-    let countTicketsFechadosHoje = 0;
-    let countLeadsPendentes = 0;
-    let countLeadsContatadosHoje = 0;
-
-    // 1. Chamados de Suporte
-    for (const t of tickets) {
-      const cod = sanitizeFilePart(t.criadoPor || "DI");
-      const nome = sanitizeFilePart(t.criadoPorNome || "SemNome");
-      const dataAbertura = t.criadoEm ? getBrasiliaDateStr(new Date(t.criadoEm)) : hoje;
-      const numStr = t.numero ? `chamado-${String(t.numero).padStart(4, "0")}_` : "";
-
-      if (t.status === "fechado") {
-        const fechadoData = t.fechadoEm
-          ? getBrasiliaDateStr(new Date(t.fechadoEm))
-          : (t.atualizadoEm ? getBrasiliaDateStr(new Date(t.atualizadoEm)) : hoje);
-
-        // Se fechou HOJE: inclui no backup de hoje com sufixo ENCERRADO
-        // Se fechou em dia anterior: a partir do dia seguinte NÃO entra mais no backup
-        if (fechadoData === hoje) {
-          countTicketsFechadosHoje++;
-          const filename = `DI_${cod}_${nome}_${numStr}aberto_${dataAbertura}_ENCERRADO_${fechadoData}.pdf`;
-          incluidos.push({ tipo: "ticket", data: t, filename });
-        }
-      } else {
-        // Chamado em aberto/andamento: entra todo dia no backup
-        countTicketsAbertos++;
-        const filename = `DI_${cod}_${nome}_${numStr}aberto_${dataAbertura}.pdf`;
-        incluidos.push({ tipo: "ticket", data: t, filename });
-      }
-    }
-
-    // 2. Pedidos "Quero Fazer Parte"
-    for (const l of leads) {
-      const nome = sanitizeFilePart(l.nome || "Interessado");
-      const idRef = sanitizeFilePart(l.telefone || l.email || l.id.slice(-6));
-      const dataAbertura = l.createdAt ? getBrasiliaDateStr(new Date(l.createdAt)) : hoje;
-
-      if (l.status === "pendente") {
-        // Pendente (ainda não contatado): entra todo dia no backup
-        countLeadsPendentes++;
-        const filename = `FazerParte_${nome}_${idRef}_aberto_${dataAbertura}.pdf`;
-        incluidos.push({ tipo: "lead", data: l, filename });
-      } else {
-        // Marcado como "Já contatei" (lida, resolvida ou arquivada)
-        const contatadoData = l.contatadoEm
-          ? getBrasiliaDateStr(new Date(l.contatadoEm))
-          : (l.atualizadoEm ? getBrasiliaDateStr(new Date(l.atualizadoEm)) : hoje);
-
-        // Se foi contatado HOJE: inclui no backup de hoje com sufixo CONTATADO
-        // Se foi contatado em dia anterior: a partir do dia seguinte NÃO entra mais no backup
-        if (contatadoData === hoje) {
-          countLeadsContatadosHoje++;
-          const filename = `FazerParte_${nome}_${idRef}_aberto_${dataAbertura}_CONTATADO_${contatadoData}.pdf`;
-          incluidos.push({ tipo: "lead", data: l, filename });
-        }
-      }
-    }
-
-    if (incluidos.length === 0) {
-      return {
-        success: true,
-        total: 0,
-        ticketsAbertos: 0,
-        ticketsFechadosHoje: 0,
-        leadsPendentes: 0,
-        leadsContatadosHoje: 0,
-        pasta: `backup-suporte/${hoje}/`,
-        dataHoje: hoje
-      };
-    }
-
-    const bucketStatus = await ensureBucketExists(STORAGE_BUCKET);
-    if (!bucketStatus.ready) {
-      throw new Error("Bucket do Supabase Storage não está disponível para o backup.");
-    }
-
-    const client = getActiveStorageClient();
-    const zip = new JSZip();
-
-    // Salva cada PDF individualmente no Storage dentro da pasta da data
-    for (const item of incluidos) {
-      const pdfBuffer = item.tipo === "ticket"
-        ? buildSupportTicketPdf(item.data)
-        : buildQueroFazerPartePdf(item.data);
-      const objectKey = `backup-suporte/${hoje}/${item.filename}`;
-      await client.putObject(STORAGE_BUCKET, objectKey, pdfBuffer, pdfBuffer.length, {
-        "Content-Type": "application/pdf"
-      });
-      zip.file(item.filename, pdfBuffer);
-    }
-
-    // Gera o ZIP consolidado na pasta para permitir download
-    const zipName = `backup-suporte_${hoje}.zip`;
-    const zipKey = `backup-suporte/${hoje}/${zipName}`;
-    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
-    await client.putObject(STORAGE_BUCKET, zipKey, zipBuffer, zipBuffer.length, {
-      "Content-Type": "application/zip"
-    });
-
-    const admin = opts.adminRef || (opts.manual ? "admin-manual" : "sistema-cron-22h");
-    const detalhesLog = `Backup de suporte (${opts.manual ? "manual" : "automático 22h"}): ${incluidos.length} item(ns) [Suporte: ${countTicketsAbertos} abertos, ${countTicketsFechadosHoje} encerrados hoje | Fazer Parte: ${countLeadsPendentes} pendentes, ${countLeadsContatadosHoje} contatados hoje] salvos em ${STORAGE_BUCKET}/backup-suporte/${hoje}/`;
-
-    dbService.recordAuditLog(
-      admin,
-      "SUPORTE_BACKUP",
-      detalhesLog
-    ).catch(() => {});
-
-    ultimoDiaBackupSuporte = hoje;
-
-    return {
-      success: true,
-      total: incluidos.length,
-      ticketsAbertos: countTicketsAbertos,
-      ticketsFechadosHoje: countTicketsFechadosHoje,
-      leadsPendentes: countLeadsPendentes,
-      leadsContatadosHoje: countLeadsContatadosHoje,
-      pasta: `backup-suporte/${hoje}/`,
-      dataHoje: hoje,
-      arquivoZip: zipKey,
-      relZip: zipKey.replace("backup-suporte/", ""),
-      tamanhoZipKb: Math.round(zipBuffer.length / 1024)
-    };
-  } finally {
-    backupSuporteEmAndamento = false;
-  }
-}
-
-// Agendador diário do backup do suporte: roda às 22:00 (Brasília)
-async function verificarAgendadorBackupSuporte(): Promise<void> {
-  const agoraHora = getBrasiliaTimeStr();
-  if (agoraHora !== "22:00") return;
-
-  const hoje = getBrasiliaDateStr();
-  if (ultimoDiaBackupSuporte === hoje) return;
-
-  ultimoDiaBackupSuporte = hoje;
-  console.log(`[Backup Suporte] Disparando backup automático diário das 22:00 (${hoje})...`);
-  try {
-    const res = await executarBackupSuporteDiario({ adminRef: "sistema-cron-22h" });
-    console.log(`[Backup Suporte] Backup concluído às 22:00: ${res.total} chamado(s) arquivado(s) em ${res.pasta}`);
-  } catch (err: any) {
-    console.error(`[Backup Suporte] Falha no backup automático das 22:00:`, err?.message || err);
-  }
-}
-
-// Rota para disparo manual pelo painel admin (botão "Fazer Backup")
-app.post("/api/admin/support/backup", requireAdmin, async (req: any, res) => {
-  try {
-    const resultado = await executarBackupSuporteDiario({
-      manual: true,
-      adminRef: req.user?.code || "admin",
-      userToken: req.user?.supabaseToken
-    });
-
-    if (resultado.total === 0) {
-      return res.status(400).json({
-        error: "Nenhum chamado de suporte ou pedido para fazer parte pendente/concluído hoje para exportar."
-      });
-    }
-
-    res.json({
-      success: true,
-      count: resultado.total,
-      ticketsAbertos: resultado.ticketsAbertos,
-      ticketsFechadosHoje: resultado.ticketsFechadosHoje,
-      leadsPendentes: resultado.leadsPendentes,
-      leadsContatadosHoje: resultado.leadsContatadosHoje,
-      pasta: resultado.pasta,
-      arquivo: resultado.arquivoZip,
-      rel: resultado.relZip,
-      tamanhoKb: resultado.tamanhoZipKb
-    });
-  } catch (err: any) {
-    console.error("[Backup Suporte] Erro:", err);
-    res.status(500).json({ error: err?.message || "Erro ao gerar o backup do suporte." });
-  }
-});
 
 // Limpeza de todos os chamados de suporte (para testes do zero)
-app.post("/api/admin/support/clear-all", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/support/clear-all", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const limpo = await dbService.clearAllSupportTickets(req.user?.code || "admin", req.user?.supabaseToken);
     if (!limpo.success) {
@@ -3825,231 +2856,12 @@ app.post("/api/admin/support/clear-all", requireAdmin, async (req: any, res) => 
     console.error("[Limpeza Suporte] Erro:", err);
     res.status(500).json({ error: "Erro ao limpar chamados de suporte." });
   }
-});
+}));
 
-// ---- ADMIN: backup e restauração do site ----
-// Restore de backup: somente arquivos .json gerados pelo painel (validação de estrutura + checksum na rota)
-const backupUploadMulter = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 150 * 1024 * 1024 },
-  fileFilter: (req: any, file: any, cb: any) => {
-    if (/\.json$/i.test(file.originalname || "")) return cb(null, true);
-    cb(null, false);
-  }
-});
 
-app.post("/api/admin/backup/create", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await createSiteBackup({ geradoPor: req.user?.code || "admin", userToken: req.user?.supabaseToken });
-    // Regra A: cada "Criar Backup Agora" também gera o dump do banco (configs,
-    // tabelas, contas + cópia dos audit_logs) em backups-banco/. Falha aqui não
-    // derruba a save ‐ o dump é complementar.
-    let dump: { nome: string; url: string; tamanhoKb: number } | null = null;
-    try {
-      const d = await createDatabaseDump({ geradoPor: req.user?.code || "admin", userToken: req.user?.supabaseToken });
-      dump = { nome: d.nome, url: d.url, tamanhoKb: d.tamanhoKb };
-    } catch (err: any) {
-      console.warn("[Backup] Dump automático falhou:", err?.message || err);
-    }
-    res.json({ ...result, dump });
-  } catch (err: any) {
-    console.error("[Backup] Erro ao criar:", err);
-    res.status(500).json({ error: "Erro ao criar o backup do site." });
-  }
-});
-
-app.post("/api/admin/backup/dump", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await createDatabaseDump({ geradoPor: req.user?.code || "admin", userToken: req.user?.supabaseToken });
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao gerar o dump do banco:", err);
-    res.status(500).json({ error: "Erro ao gerar o dump do banco." });
-  }
-});
-
-app.get("/api/admin/backup/banco-list", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await listBancoBackups();
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao listar dumps:", err);
-    res.status(500).json({ error: "Erro ao listar os dumps do banco." });
-  }
-});
-
-app.delete("/api/admin/backup/banco-delete", requireAdmin, async (req: any, res) => {
-  try {
-    const { key } = req.body || {};
-    if (!key) return res.status(400).json({ error: "Informe o dump a excluir." });
-    const result = await deleteBancoBackup(String(key), req.user?.code || "admin");
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao excluir dump:", err);
-    res.status(400).json({ error: err?.message || "Erro ao excluir o dump do banco." });
-  }
-});
-
-app.get("/api/admin/backup/banco-download/:nome", requireAdmin, async (req: any, res) => {
-  try {
-    const nome = String(req.params.nome || "").replace(/^backups-banco\//, "");
-    const key = "backups-banco/" + nome;
-    const { buffer, nome: nomeZip } = await buildBancoBackupZip(key);
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${nomeZip.replace(/[\r\n"]/g, "_")}"`);
-    res.setHeader("Content-Length", buffer.length);
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(buffer);
-  } catch (err: any) {
-    console.error("[Backup] Erro no download do dump:", err);
-    res.status(400).json({ error: err?.message || "Erro ao baixar o dump do banco." });
-  }
-});
-
-// Download do ZIP do backup do suporte (PDFs com as conversas dos chamados).
-// SOMENTE admin (requireAdmin + subdomínio). O objeto nunca é servido pelas
-// rotas públicas de mídia (guardas isBackupFamilyKey em stream/preview/hls).
-app.get("/api/admin/backup/suporte-download/*", requireAdmin, async (req: any, res) => {
-  try {
-    const raw = req.params[0] || "";
-    let rel = raw;
-    try { rel = decodeURIComponent(raw); } catch {}
-    const key = "backup-suporte/" + rel;
-    const { buffer, nome } = await buildSuporteBackupZip(key);
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${nome.replace(/[\r\n"]/g, "_")}"`);
-    res.setHeader("Content-Length", buffer.length);
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    dbService
-      .recordAuditLog(req.user?.code || "admin", "SUPORTE_BACKUP_BAIXADO", `Backup do suporte baixado: ${nome}`)
-      .catch(() => {});
-    res.end(buffer);
-  } catch (err: any) {
-    console.error("[Backup] Erro no download do backup do suporte:", err);
-    res.status(400).json({ error: err?.message || "Erro ao baixar o backup do suporte." });
-  }
-});
-
-// ---- ADMIN: verificador de integridade das mídias (leitura) ----
-app.get("/api/admin/backup/integrity", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await checkMediaIntegrity();
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao verificar integridade:", err);
-    res.status(500).json({ error: "Erro ao verificar a integridade das mídias." });
-  }
-});
-
-// ---- ADMIN: limpeza de mídias órfãs (somente as confirmadas pelo usuário) ----
-// Cada chave é re-verificada ANTES da exclusão (pode ter virado referência entre
-// a listagem e a confirmação). Backups nunca são tocados.
-app.post("/api/admin/backup/cleanup-orphans", requireAdmin, async (req: any, res) => {
-  try {
-    const { chaves } = req.body || {};
-    if (!Array.isArray(chaves) || chaves.length === 0) {
-      return res.status(400).json({ error: "Nenhuma mídia selecionada para limpeza." });
-    }
-    if (chaves.length > 500) {
-      return res.status(400).json({ error: "Limite de 500 mídias por limpeza excedido." });
-    }
-    if (isRestoreInProgress()) {
-      return res.status(400).json({ error: "Uma restauração está em andamento ‐ aguarde para limpar mídias." });
-    }
-    const strings = chaves.map((c: any) => String(c)).filter((c: string) => c && c.startsWith("/") === false);
-    const result = await removeOrphanMedia(strings, req.user?.code || "admin");
-    res.json({
-      success: true,
-      message: `Limpeza concluída: ${result.removidas.length} mídia(s) órfã(s) removida(s), ${result.mantidas.length} mantida(s).`,
-      removidas: result.removidas,
-      mantidas: result.mantidas
-    });
-  } catch (err: any) {
-    console.error("[Backup] Erro na limpeza de órfãos:", err);
-    res.status(500).json({ error: "Erro ao limpar mídias órfãs." });
-  }
-});
-
-app.get("/api/admin/backup/list", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await listSiteBackups();
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao listar:", err);
-    res.status(500).json({ error: "Erro ao listar os backups do site." });
-  }
-});
-
-app.get("/api/admin/backup/status", requireAdmin, async (req: any, res) => {
-  try {
-    const result = await getSiteStatus();
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao verificar estado:", err);
-    res.status(500).json({ error: "Erro ao verificar o estado atual do site." });
-  }
-});
-
-app.post("/api/admin/backup/restore", requireAdmin, backupUploadMulter.single("arquivo"), async (req: any, res) => {
-  try {
-    const { key, restaurarConexoes, mesclar, forceVazio } = req.body || {};
-    const buffer = req.file?.buffer;
-    if (!key && !buffer) {
-      return res.status(400).json({ error: "Envie um arquivo de backup ou informe a versão a restaurar." });
-    }
-    const restaurarConexoesFlag = restaurarConexoes === undefined || restaurarConexoes === null
-      ? true
-      : restaurarConexoes === true || restaurarConexoes === "true";
-    const mesclarFlag = mesclar === true || mesclar === "true";
-    const forceVazioFlag = forceVazio === true || forceVazio === "true";
-    const result = await restoreSiteBackup({
-      key: key || undefined,
-      buffer,
-      geradoPor: req.user?.code || "admin",
-      userToken: req.user?.supabaseToken,
-      restaurarConexoes: restaurarConexoesFlag,
-      mesclar: mesclarFlag,
-      forceVazio: forceVazioFlag
-    });
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao restaurar:", err);
-    res.status(400).json({ error: err?.message || "Erro ao restaurar o backup do site." });
-  }
-});
-
-// ---- ADMIN: exclusão DEFINITIVA de um backup (lista não fica interminável) ----
-app.delete("/api/admin/backup/delete", requireAdmin, async (req: any, res) => {
-  try {
-    const { key } = req.body || {};
-    if (!key) return res.status(400).json({ error: "Informe o backup a excluir." });
-    const result = await deleteSiteBackup(String(key), req.user?.code || "admin");
-    res.json(result);
-  } catch (err: any) {
-    console.error("[Backup] Erro ao excluir:", err);
-    res.status(400).json({ error: err?.message || "Erro ao excluir o backup do site." });
-  }
-});
-
-// ---- ADMIN: download da save como .zip (não abre JSON no navegador) ----
-app.get("/api/admin/backup/download/:nome", requireAdmin, async (req: any, res) => {
-  try {
-    const nome = String(req.params.nome || "").replace(/^backups-site\//, "");
-    const key = "backups-site/" + nome;
-    const { buffer, nome: nomeZip } = await buildBackupZip(key);
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename="${nomeZip.replace(/[\r\n"]/g, "_")}"`);
-    res.setHeader("Content-Length", buffer.length);
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(buffer);
-  } catch (err: any) {
-    console.error("[Backup] Erro no download:", err);
-    res.status(400).json({ error: err?.message || "Erro ao baixar o backup." });
-  }
-});
 
 // ---- ADMIN: modo manutenção ----
-app.post("/api/admin/manutencao", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/manutencao", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { ativo, mensagem } = req.body || {};
     const result = await setManutencao(!!ativo, typeof mensagem === "string" ? cleanText(mensagem) : "", req.user?.code || "admin");
@@ -4058,10 +2870,10 @@ app.post("/api/admin/manutencao", requireAdmin, async (req: any, res) => {
     console.error("[Manutenção] Erro:", err);
     res.status(500).json({ error: err?.message || "Erro ao alterar o modo manutenção." });
   }
-});
+}));
 
 // ---- PÖBLICO: status do modo manutenção (para a página de manutenção) ----
-app.get("/api/manutencao/status", async (req, res) => {
+app.get("/api/manutencao/status", asyncHandler(async (req, res) => {
   try {
     const data = await cacheJsonResponse("manutencao/status", 30000, async () => {
       const status = await getManutencaoStatus();
@@ -4071,19 +2883,19 @@ app.get("/api/manutencao/status", async (req, res) => {
   } catch {
     res.json({ success: true, ativo: false, mensagem: "" });
   }
-});
+}));
 
 // ---- ADMIN: gerenciamento dos usuários da área de suporte ----
-app.get("/api/admin/support-users", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/support-users", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const users = await dbService.getSupportUsers(req.user?.supabaseToken);
     res.json({ success: true, users });
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao carregar usuários de suporte." });
   }
-});
+}));
 
-app.post("/api/admin/support-users", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/support-users", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { email, nome, senha, ativo } = req.body;
     if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -4132,12 +2944,12 @@ app.post("/api/admin/support-users", requireAdmin, async (req: any, res) => {
     console.error("[support-users] erro:", err);
     res.status(500).json({ error: "Erro ao cadastrar usuário de suporte." });
   }
-});
+}));
 
 // Redefinição de senha de um responsável pelo admin: define uma nova senha
 // temporária (repassada ao responsável) e marca a troca como pendente ‐ no
 // próximo login o responsável deverá escolher a própria senha.
-app.post("/api/admin/support-users/:email/reset-password", passwordChangeRateLimiter, requireAdmin, async (req: any, res) => {
+app.post("/api/admin/support-users/:email/reset-password", passwordChangeRateLimiter, asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { novaSenha } = req.body;
     if (!isValidSupportPassword(novaSenha)) {
@@ -4179,6 +2991,11 @@ app.post("/api/admin/support-users/:email/reset-password", passwordChangeRateLim
       }
     }
 
+    // Auth updated_at is revalidated on every request; explicit revocation also
+    // covers requests in flight on this process.
+    const { data: accounts } = await getSupabaseTrustedClient()!.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    const resetAccount = accounts?.users.find(u => u.email?.toLowerCase() === email);
+    if (resetAccount) sessions.revokeAccount(resetAccount.id);
     const flag = await dbService.setSupportUserMustChange(email, true, req.user?.code || "Admin", req.user?.supabaseToken);
     if (!flag.success) return res.status(400).json({ error: flag.error });
 
@@ -4187,14 +3004,14 @@ app.post("/api/admin/support-users/:email/reset-password", passwordChangeRateLim
     console.error("[reset-password] erro:", err);
     res.status(500).json({ error: "Erro ao redefinir a senha." });
   }
-});
+}));
 
 // ====================================================================
 // NIPPONFLEX — D.I.s (fonte de dados: API Nipponflex)
 // ====================================================================
 
 // Status do sistema de sincronização (para o card "Estado do Sistema" no admin)
-app.get("/api/admin/nipponflex/status", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/nipponflex/status", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const estado = getNfEstado();
     const logs = getNfLogs();
@@ -4203,12 +3020,12 @@ app.get("/api/admin/nipponflex/status", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao obter status do Nipponflex." });
   }
-});
+}));
 
 // Sincronização manual (botão de emergência "SINCRONIZAR DADOS").
 // Roda em background (fire-and-forget) — a resposta volta na hora e o
 // card acompanha o andamento pelo status/logs.
-app.post("/api/admin/nipponflex/sync", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/nipponflex/sync", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     if (getNfEstado().status === "em_andamento") {
       return res.json({ success: false, erro: "Sincronização já em andamento." });
@@ -4219,10 +3036,10 @@ app.post("/api/admin/nipponflex/sync", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao disparar sincronização." });
   }
-});
+}));
 
 // Lista paginada de D.I.s (nome, código, situação)
-app.get("/api/admin/nipponflex/dados", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/nipponflex/dados", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const pagina = Math.max(1, parseInt(String(req.query.pagina || "1"), 10) || 1);
     const busca = String(req.query.busca || "").trim();
@@ -4232,10 +3049,10 @@ app.get("/api/admin/nipponflex/dados", requireAdmin, async (req: any, res) => {
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao listar D.I.s." });
   }
-});
+}));
 
 // Situações que podem logar no site (ex.: ["A"] inicialmente)
-app.get("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/nipponflex/situacoes-permitidas", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const client = getSupabaseTrustedClient();
     const { data } = await client!.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
@@ -4243,9 +3060,9 @@ app.get("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req: 
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao obter situações permitidas." });
   }
-});
+}));
 
-app.post("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/nipponflex/situacoes-permitidas", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { situacoes } = req.body;
     if (!Array.isArray(situacoes)) {
@@ -4259,7 +3076,7 @@ app.post("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req:
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar situações permitidas." });
   }
-});
+}));
 
 // ---------------- SUPABASE STORAGE & STREAMING ENDPOINTS ----------------
 
@@ -4270,7 +3087,7 @@ app.post("/api/admin/nipponflex/situacoes-permitidas", requireAdmin, async (req:
 // SMTP_USER/SMTP_PASS/MAIL_FROM_NAME). O painel só vê o status (user mascarado).
 // Envio é fire-and-forget: falha de e-mail nunca quebra formulário ou API.
 
-app.get("/api/admin/support/email-config", requireAdmin, async (req: any, res) => {
+app.get("/api/admin/support/email-config", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const config = await dbService.getOuvidoriaConfig();
     res.json({
@@ -4286,9 +3103,9 @@ app.get("/api/admin/support/email-config", requireAdmin, async (req: any, res) =
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao obter configurações de e-mail." });
   }
-});
+}));
 
-app.post("/api/admin/support/email-config", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/support/email-config", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { emailSuporte, emailParcerias, notifySuporteEmail, notifyParceriaEmail } = req.body;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -4320,9 +3137,9 @@ app.post("/api/admin/support/email-config", requireAdmin, async (req: any, res) 
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao salvar configurações de e-mail." });
   }
-});
+}));
 
-app.post("/api/admin/support/email-test", requireAdmin, async (req: any, res) => {
+app.post("/api/admin/support/email-test", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
     const { to } = req.body;
     const config = await dbService.getOuvidoriaConfig();
@@ -4335,7 +3152,7 @@ app.post("/api/admin/support/email-test", requireAdmin, async (req: any, res) =>
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao testar e-mail." });
   }
-});
+}));
 
 // ---------------- SUPABASE STORAGE & STREAMING ENDPOINTS ----------------
 
@@ -4344,83 +3161,16 @@ app.post("/api/admin/support/email-test", requireAdmin, async (req: any, res) =>
 // ==========================================
 // Verifica conectividade real SEM expor nenhuma credencial (token, client
 // secret nunca saem do servidor).
-app.get("/api/admin/integrations/status", requireAdmin, async (req: any, res) => {
-  try {
-    const dateStr = new Date().toISOString();
-    const vimeoCfg = await dbService.getVimeoConfig();
-
-    const storage = {
-      configured: true,
-      source: "env",
-      online: false,
-      message: "Supabase Storage não respondeu.",
-      endpoint: process.env.SUPABASE_URL || "",
-      bucket: STORAGE_BUCKET,
-      region: "",
-      latencyMs: null as number | null,
-      lastCheckedAt: dateStr
-    };
-
-    const t0 = Date.now();
-    const testRes = await testStorageConnection();
-    storage.latencyMs = Date.now() - t0;
-    if (testRes.success && Array.isArray(testRes.buckets)) {
-      storage.online = true;
-      storage.message = `Conectado ‐ ${testRes.buckets.length} bucket(s) acessíveis no servidor.`;
-    } else {
-      storage.message = testRes.message || "Supabase Storage não respondeu.";
-    }
-
-    const vimeoEnv = !!process.env.VIMEO_ACCESS_TOKEN || !!process.env.VIMEO_CLIENT_ID;
-    const vimeoDb = !!(vimeoCfg.accessToken && vimeoCfg.clientId && vimeoCfg.clientSecret);
-    const vimeoSource = vimeoEnv ? "env" : vimeoDb ? "db" : "none";
-
-    const vimeo = {
-      configured: vimeoSource !== "none",
-      source: vimeoSource,
-      online: false,
-      message: "Não configurado ‐ adicione VIMEO_CLIENT_ID, VIMEO_CLIENT_SECRET e VIMEO_ACCESS_TOKEN ao .env.",
-      accountName: "",
-      accountLink: "",
-      latencyMs: null as number | null,
-      lastCheckedAt: dateStr
-    };
-
-    if (vimeoSource !== "none") {
-      try {
-        const t0 = Date.now();
-        const account: any = await Promise.race([
-          getVimeoAccountDetails(
-            (vimeoCfg.clientId || "").trim(),
-            (vimeoCfg.clientSecret || "").trim(),
-            (vimeoCfg.accessToken || "").trim()
-          ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000))
-        ]);
-        vimeo.online = true;
-        vimeo.latencyMs = Date.now() - t0;
-        vimeo.accountName = account?.name || "";
-        vimeo.accountLink = account?.link || "";
-        vimeo.message = "Conectado ‐ API do Vimeo respondendo.";
-      } catch (err: any) {
-        vimeo.message = err?.message === "timeout"
-          ? "Tempo esgotado ao contatar a API do Vimeo."
-          : "Falha ao conectar com a API do Vimeo (credenciais inválidas ou rede indisponível).";
-      }
-    }
-
-    return res.json({ storage, vimeo });
-  } catch (err: any) {
-    console.error("[integrations/status]", err);
-    return res.status(500).json({ error: "Erro ao verificar o status das integrações." });
-  }
-});
+app.get("/api/admin/integrations/status", asyncHandler(requireAdmin), asyncHandler(async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await integrationStatus());
+}));
 
 // Multipart / Buffer / Base64 Direct Upload to Supabase Storage with Folder Structure
 // Somente ADMIN: permite gravar em qualquer pasta da allowlist (inclusive
 // materiais/ e cursos/videos). Usuários comuns têm rotas próprias com escopo
 // fixo (fenix_social via /api/fenix-social/posts, anexos via /api/support/*).
-app.post("/api/storage/upload", uploadRateLimiter, requireAdmin, uploadMulter.single("file"), async (req: any, res) => {
+app.post("/api/storage/upload", uploadRateLimiter, asyncHandler(requireAdmin), uploadConcurrency, uploadMulter.single("file"), asyncHandler(async (req: any, res) => {
   try {
     let fileBuffer: Buffer | null = null;
     let fileName = "arquivo";
@@ -4497,7 +3247,7 @@ app.post("/api/storage/upload", uploadRateLimiter, requireAdmin, uploadMulter.si
     console.error("Erro ao realizar upload no Storage:", err);
     res.status(500).json({ error: "Falha ao gravar arquivo no armazenamento." });
   }
-});
+}));
 
 // Objetos das famílias de backup (backups-site/, backups-banco/, backup-suporte/)
 // contêm dados sensíveis (configs com vimeoConfig/supportTickets,
@@ -4518,33 +3268,41 @@ function isBackupFamilyKey(objectKey: string): boolean {
 // recebem o MESMO 404 de arquivo inexistente (não revela existência do arquivo).
 // Requests do próprio servidor (loopback ‐ ex.: ffmpeg remuxando HLS de material
 // via http://127.0.0.1:PORT) passam sem sessão.
-function isMaterialMediaAllowed(req: any, res: any): boolean {
-  // Requests do próprio servidor (loopback) só passam com o header interno que o
-  // ffmpeg envia (remux de HLS de material) ‐ um request local sem esse header é
-  // tratado como anônimo, igual a qualquer outro.
-  // ATENÆÂO (14/08): o loopback é verificado pelo ENDEREÆO DO SOCKET
-  // (req.socket.remoteAddress), nunca por req.ip ‐ com TRUST_PROXY=1 ativo, um
-  // atacante que alcance a porta 3000 direto controla o req.ip (via
-  // X-Forwarded-For) e forjaria "127.0.0.1" para burlar a guarda.
-  const socketIp = req.socket?.remoteAddress || "";
-  if ((socketIp === "127.0.0.1" || socketIp === "::1" || socketIp === "::ffff:127.0.0.1") && req.headers["x-internal-ffmpeg"] === "1") {
+function mediaAbortSignal(res: import("express").Response, timeout = 120000): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  timer.unref();
+  res.once("close", () => { clearTimeout(timer); controller.abort(); });
+  res.once("finish", () => clearTimeout(timer));
+  return controller.signal;
+}
+function pipeMedia(stream: import("node:stream").Readable, res: import("express").Response) {
+  res.once("close", () => stream.destroy());
+  stream.once("error", () => { if (res.headersSent) res.destroy(); else res.status(502).end(); });
+  stream.pipe(res);
+}
+const internalMediaTokens = new Map<string, { key: string; expiresAt: number }>();
+async function isMaterialMediaAllowed(req: any, res: any): Promise<boolean> {
+  const user = await resolveUser(req, res);
+  return !!user && !user.mustChangePassword;
+}
+async function authorizeMedia(req: any, res: any, key: string): Promise<boolean> {
+  const internal = typeof req.headers["x-internal-ffmpeg"] === "string" && internalMediaTokens.get(req.headers["x-internal-ffmpeg"]);
+  const socket = req.socket?.remoteAddress;
+  if (internal && internal.key === key && internal.expiresAt > Date.now() && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(socket)) {
+    res.setHeader("Cache-Control", "private, no-store");
     return true;
   }
-  let accessToken = req.cookies?.access_token;
-  if (!accessToken && req.headers.authorization) {
-    const parts = String(req.headers.authorization).split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") accessToken = parts[1];
-  }
-  if (accessToken) {
-    let decoded = verifyJWT(accessToken);
-    if (decoded && decoded.jti && revokedJtis.has(decoded.jti)) decoded = null;
-    if (decoded) return true;
-    if (decoded?.jti) {
-      jtiSessions.delete(decoded.jti);
-      persistJtiSessions();
-    }
-  }
-  return !!handleRefreshFlow(req, res);
+  const policy = await mediaPolicy(key);
+  res.setHeader("Cache-Control", policy === "public" ? "public, max-age=60" : "private, no-store");
+  if (policy === "blocked") return false;
+  if (policy === "public") return true;
+  const user = await resolveUser(req, res);
+  if (user?.mustChangePassword) return false;
+  if (policy === "member") return !!user;
+  if (user?.role === "admin") return true;
+  const moderator = req.cookies?.moderator_media;
+  return typeof moderator === "string" && moderator.length <= 256 && !!(await dbService.validateModeratorToken(moderator));
 }
 
 // --- Proteção contra travamento do Storage remoto sob concorrência ---
@@ -4559,6 +3317,7 @@ const STORAGE_PREVIEW_CACHE_MAX_BYTES = 128 * 1024 * 1024;
 const STORAGE_PREVIEW_CACHE_MAX_FILE = 4 * 1024 * 1024;
 const STORAGE_PREVIEW_CACHE_TTL = 60 * 60 * 1000;
 const storagePreviewCache = new Map<string, { data: Buffer; mime: string; time: number }>();
+const imagePreviewPending = new Map<string, Promise<{ data: Buffer; mime: string }>>();
 let storagePreviewCacheBytes = 0;
 function storagePreviewCacheGet(key: string) {
   const hit = storagePreviewCache.get(key);
@@ -4585,13 +3344,13 @@ function storagePreviewCacheSet(key: string, data: Buffer, mime: string) {
   }
 }
 
-app.get("/api/storage/preview/*", async (req, res) => {
+app.get("/api/storage/preview/*", mediaConcurrency, asyncHandler(async (req, res) => {
   try {
     const rawKey = req.params[0];
     if (!rawKey) return res.status(400).json({ error: "Chave do arquivo ausente." });
 
-    const objectKey = decodeURIComponent(rawKey);
-    if (objectKey.length > 500 || objectKey.includes("..") || objectKey.includes("\\")) {
+    const objectKey = storageKey(rawKey);
+    if (!objectKey) {
       return res.status(400).json({ error: "Chave do arquivo inválida." });
     }
     if (isBackupFamilyKey(objectKey)) {
@@ -4599,13 +3358,33 @@ app.get("/api/storage/preview/*", async (req, res) => {
     }
     const ext = fileExtOf(objectKey);
     const mime = EXT_TO_MIME[ext] || "application/octet-stream";
-    const isImage = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(objectKey);
-
-    if (objectKey.startsWith("materiais/") && !isImage && !isMaterialMediaAllowed(req, res)) {
+    if (!await authorizeMedia(req, res, objectKey)) {
       return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
     }
 
     const isExplicitDownload = req.query.download === "1" || req.query.download === "true";
+    const width = previewWidth(req.query, isExplicitDownload);
+    const sendPreview = async (data: Buffer, originalMime: string) => {
+      let image = { data, mime: originalMime };
+      if (width) {
+        const variantKey = `${objectKey}:webp:${width}`;
+        const cached = storagePreviewCacheGet(variantKey);
+        if (cached) image = cached;
+        else {
+          let pending = imagePreviewPending.get(variantKey);
+          if (!pending) {
+            pending = resizePreview(data, originalMime, width).then(result => {
+              storagePreviewCacheSet(variantKey, result.data, result.mime);
+              return result;
+            }).finally(() => imagePreviewPending.delete(variantKey));
+            imagePreviewPending.set(variantKey, pending);
+          }
+          image = await pending;
+        }
+      }
+      res.setHeader('Content-Type', image.mime);
+      return res.end(image.data);
+    };
     const getSafeFilename = () => {
       let safeName = (typeof req.query.filename === "string" && req.query.filename.trim())
         ? req.query.filename.trim().replace(/[\r\n"]/g, "_")
@@ -4618,7 +3397,7 @@ app.get("/api/storage/preview/*", async (req, res) => {
     if (cacheHit) {
       res.setHeader("Content-Type", cacheHit.mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
+      if (isExplicitDownload) res.setHeader("Cache-Control", "private, no-store");
       if (isExplicitDownload) {
         const safeName = getSafeFilename();
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`);
@@ -4626,7 +3405,7 @@ app.get("/api/storage/preview/*", async (req, res) => {
         const safeName = path.basename(objectKey).replace(/[\r\n"]/g, "_");
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
       }
-      return res.end(cacheHit.data);
+      return await sendPreview(cacheHit.data, cacheHit.mime);
     }
 
     const client = getActiveStorageClient();
@@ -4642,51 +3421,49 @@ app.get("/api/storage/preview/*", async (req, res) => {
       }
     };
     if (stat.size <= STORAGE_PREVIEW_CACHE_MAX_FILE) {
-      const data = await withTimeout(
-        (async () => {
-          const stream = await client.getObject(STORAGE_BUCKET, objectKey);
-          const chunks: Buffer[] = [];
-          for await (const chunk of stream) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
-          return Buffer.concat(chunks);
-        })(),
-        4000,
-          "Timeout no Storage"
-      );
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res, 4000));
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += buffer.length;
+        if (bytes > STORAGE_PREVIEW_CACHE_MAX_FILE) { stream.destroy(); throw new Error("Preview excedeu o limite."); }
+        chunks.push(buffer);
+      }
+      const data = Buffer.concat(chunks);
       storagePreviewCacheSet(objectKey, data, mime);
       res.setHeader("Content-Type", mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
+      if (isExplicitDownload) res.setHeader("Cache-Control", "private, no-store");
       dispositionHeaders();
-      res.end(data);
+      await sendPreview(data, mime);
     } else {
       res.setHeader("Content-Type", mime);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", isExplicitDownload ? "no-cache" : "public, max-age=86400");
+      if (isExplicitDownload) res.setHeader("Cache-Control", "private, no-store");
       dispositionHeaders();
-      const stream = await client.getObject(STORAGE_BUCKET, objectKey);
-      stream.pipe(res);
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res));
+      pipeMedia(stream, res);
     }
   } catch (err: any) {
     res.status(404).json({ error: "Arquivo não encontrado no Storage." });
   }
-});
+}));
 
 // Stream Video / Audio with Range Requests support
-app.get("/api/storage/stream/*", async (req, res) => {
+app.get("/api/storage/stream/*", mediaConcurrency, asyncHandler(async (req, res) => {
   try {
     const rawKey = req.params[0];
     if (!rawKey) return res.status(400).json({ error: "Chave do arquivo ausente." });
 
-    const objectKey = decodeURIComponent(rawKey);
-    if (objectKey.length > 500 || objectKey.includes("..") || objectKey.includes("\\")) {
+    const objectKey = storageKey(rawKey);
+    if (!objectKey) {
       return res.status(400).json({ error: "Chave do arquivo inválida." });
     }
     if (isBackupFamilyKey(objectKey)) {
       return res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
     }
-    if (objectKey.startsWith("materiais/") && !isMaterialMediaAllowed(req, res)) {
+    if (!await authorizeMedia(req, res, objectKey)) {
       return res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
     }
 
@@ -4709,10 +3486,11 @@ app.get("/api/storage/stream/*", async (req, res) => {
 
     const range = req.headers.range;
     if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const parsed = parseByteRange(range, fileSize);
+      if (!parsed) { res.setHeader("Content-Range", `bytes */${fileSize}`); return res.status(416).end(); }
+      const { start, end } = parsed;
       const chunkSize = end - start + 1;
+      const stream = await client.getPartialObject(STORAGE_BUCKET, objectKey, start, chunkSize, mediaAbortSignal(res));
 
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${fileSize}`,
@@ -4721,165 +3499,55 @@ app.get("/api/storage/stream/*", async (req, res) => {
         ...streamHeaders
       });
 
-      const stream = await client.getPartialObject(STORAGE_BUCKET, objectKey, start, chunkSize);
-      stream.pipe(res);
+      pipeMedia(stream, res);
     } else {
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res));
       res.writeHead(200, {
         "Content-Length": fileSize,
         ...streamHeaders
       });
 
-      const stream = await client.getObject(STORAGE_BUCKET, objectKey);
-      stream.pipe(res);
+      pipeMedia(stream, res);
     }
   } catch (err: any) {
     res.status(404).json({ error: "Mídia/Vídeo não encontrado no Storage." });
   }
-});
+}));
 
-// Adaptive HLS Video Streaming Generator & Proxy (.m3u8 + .ts segments)
-const activeHlsJobs = new Map<string, Promise<boolean>>();
-
-app.get("/api/storage/hls/master.m3u8", async (req, res) => {
+// HLS playlists and segments share exactly the same object authorization.
+app.get("/api/storage/hls/master.m3u8", mediaConcurrency, asyncHandler(async (req, res) => {
+  const key = storageKey(req.query.key);
+  if (!key) return res.status(400).json({ error: "Chave do arquivo inválida." });
+  if (!await authorizeMedia(req, res, key)) return res.status(404).json({ error: "Playlist não encontrada." });
+  const stat = await getActiveStorageClient().statObject(STORAGE_BUCKET, key);
+  if (stat.size > 200 * 1024 * 1024) return res.status(413).json({ error: "Vídeo excede o limite de processamento." });
+  const token = crypto.randomBytes(32).toString("base64url");
+  internalMediaTokens.set(token, { key, expiresAt: Date.now() + 6 * 60 * 1000 });
   try {
-    const key = req.query.key as string;
-    if (!key) return res.status(400).json({ error: "Chave do arquivo ausente" });
-    // Chaves de objeto não podem conter sequências de travessia nem voltar ao bucket
-    if (key.length > 500 || key.includes("..") || key.includes("\\") || key.includes("%")) {
-      return res.status(400).json({ error: "Chave do arquivo inválida." });
-    }
-    if (isBackupFamilyKey(key)) {
-      return res.status(404).json({ error: "Playlist não encontrada." });
-    }
-    if (key.startsWith("materiais/") && !isMaterialMediaAllowed(req, res)) {
-      return res.status(404).json({ error: "Playlist não encontrada." });
-    }
-
-    const hash = crypto.createHash("md5").update(`${STORAGE_BUCKET}:${key}`).digest("hex");
-    const cacheDir = path.join("/tmp/hls_cache", hash);
-    const playlistPath = path.join(cacheDir, "index.m3u8");
-
-    let isCachedValid = false;
-    if (fs.existsSync(playlistPath) && fs.statSync(playlistPath).size > 0) {
-      const content = fs.readFileSync(playlistPath, "utf8");
-      if (content.includes("#EXT-X-ENDLIST") && content.includes("#EXT-X-PLAYLIST-TYPE:VOD")) {
-        isCachedValid = true;
-      }
-    }
-
-    if (!isCachedValid) {
-      if (fs.existsSync(cacheDir)) {
-        fs.rmSync(cacheDir, { recursive: true, force: true });
-      }
-      fs.mkdirSync(cacheDir, { recursive: true });
-
-      if (!activeHlsJobs.has(hash)) {
-        const jobPromise = (async () => {
-          const streamUrl = `http://127.0.0.1:${PORT}/api/storage/stream/${encodeURIComponent(key)}`;
-
-          const runFFmpeg = (args: string[]) => new Promise<boolean>((resolve) => {
-            // Header interno: o request de stream do ffmpeg (loopback) só passa
-            // na guarda de mídia com ele (isMaterialMediaAllowed).
-            const proc = spawn("ffmpeg", ["-y", "-headers", "X-Internal-Ffmpeg: 1\r\n", "-i", streamUrl, ...args, playlistPath]);
-            proc.on("close", (code) => resolve(code === 0));
-            proc.on("error", () => resolve(false));
-          });
-
-          // Remux rápido sem transcodificação
-          let ok = await runFFmpeg([
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-hls_time", "4",
-            "-hls_list_size", "0",
-            "-hls_playlist_type", "vod",
-            "-hls_segment_filename", path.join(cacheDir, "seg_%03d.ts")
-          ]);
-
-          // Fallback para libx264 ultrafast
-          if (!ok) {
-            ok = await runFFmpeg([
-              "-c:v", "libx264",
-              "-preset", "ultrafast",
-              "-crf", "22",
-              "-c:a", "aac",
-              "-hls_time", "4",
-              "-hls_list_size", "0",
-              "-hls_playlist_type", "vod",
-              "-hls_segment_filename", path.join(cacheDir, "seg_%03d.ts")
-            ]);
-          }
-
-          if (!ok || !fs.existsSync(playlistPath)) {
-            // Fallback playlist VOD para reprodutores HLS
-            const fallbackPlaylist = `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-TARGETDURATION:10
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:10.0,
-/api/storage/stream/${encodeURIComponent(key)}
-#EXT-X-ENDLIST`;
-            fs.writeFileSync(playlistPath, fallbackPlaylist, "utf8");
-            return true;
-          }
-
-          return ok;
-        })();
-
-        activeHlsJobs.set(hash, jobPromise);
-        jobPromise.finally(() => activeHlsJobs.delete(hash));
-      }
-
-      if (activeHlsJobs.has(hash)) {
-        await activeHlsJobs.get(hash);
-      }
-    }
-
-    if (!fs.existsSync(playlistPath)) {
-      return res.status(500).json({ error: "Não foi possível gerar a playlist HLS" });
-    }
-
-    const rawPlaylist = fs.readFileSync(playlistPath, "utf8");
-    const rewrittenPlaylist = rawPlaylist.replace(/(seg_\d+\.ts)/g, `/api/storage/hls/segment/${hash}/$1`);
-
-    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
-    res.setHeader("Cache-Control", "no-cache");
-    return res.send(rewrittenPlaylist);
-  } catch (err: any) {
-    res.status(500).json({ error: "Não foi possível gerar a playlist HLS." });
-  }
-});
-
-// Serve HLS .ts video segments
-app.get("/api/storage/hls/segment/:hash/:segment", (req, res) => {
+    const playlist = await hlsPlaylist(key, `http://127.0.0.1:${PORT}/api/storage/stream/${encodeURIComponent(key)}`, token);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.type("application/vnd.apple.mpegurl").send(playlist);
+  } catch (error: any) {
+    res.status(error.status === 429 ? 429 : 503).json({ error: "Vídeo disponível pela reprodução direta.", fallbackUrl: `/api/storage/stream/${encodeURIComponent(key)}` });
+  } finally { internalMediaTokens.delete(token); }
+}));
+app.get("/api/storage/hls/segment/:hash/:segment", mediaConcurrency, asyncHandler(async (req, res) => {
   const { hash, segment } = req.params;
-
-  // Strict validation: hash = md5 hex gerado pelo servidor; segment = seg_%03d.ts
-  if (!/^[a-f0-9]{32}$/.test(hash) || !/^seg_\d+\.ts$/.test(segment)) {
-    return res.status(400).json({ error: "Segmento HLS inválido." });
-  }
-
-  const cacheRoot = path.resolve("/tmp/hls_cache");
-  const segPath = path.resolve(cacheRoot, hash, segment);
-  if (!segPath.startsWith(cacheRoot + path.sep)) {
-    return res.status(400).json({ error: "Segmento HLS inválido." });
-  }
-
-  if (!fs.existsSync(segPath)) {
-    return res.status(404).json({ error: "Segmento HLS não encontrado" });
-  }
-
-  res.setHeader("Content-Type", "video/mp2t");
-  res.setHeader("Cache-Control", "public, max-age=86400");
-  return res.sendFile(segPath);
-});
+  if (!/^[a-f0-9]{64}$/.test(hash) || !/^seg_\d{3,6}\.ts$/.test(segment)) return res.status(400).json({ error: "Segmento inválido." });
+  const key = hlsObject(hash);
+  if (!key || !await authorizeMedia(req, res, key)) return res.status(404).json({ error: "Segmento não encontrado." });
+  const file = hlsSegment(hash, segment);
+  if (!file) return res.status(404).json({ error: "Segmento não encontrado." });
+  res.setHeader("Cache-Control", "private, no-store");
+  res.type("video/mp2t").sendFile(file);
+}));
 
 // ==========================================
 // VIMEO API ENDPOINTS (credenciais somente via env/banco ‐ nunca editáveis no painel)
 // ==========================================
 
 // Verify Vimeo Connection & Get Account Info
-app.get("/api/admin/vimeo/me", requireAdmin, async (req, res) => {
+app.get("/api/admin/vimeo/me", asyncHandler(requireAdmin), asyncHandler(async (req, res) => {
   try {
     const config = await dbService.getVimeoConfig();
     if (!config.accessToken || !config.clientId || !config.clientSecret) {
@@ -4899,10 +3567,10 @@ app.get("/api/admin/vimeo/me", requireAdmin, async (req, res) => {
     console.error("[vimeo/me] erro:", err);
     return res.status(500).json({ error: "Falha ao conectar com a API do Vimeo." });
   }
-});
+}));
 
 // List Videos from Admin's Vimeo Account (Node Vimeo SDK)
-app.get("/api/admin/vimeo/my-videos", requireAdmin, async (req, res) => {
+app.get("/api/admin/vimeo/my-videos", asyncHandler(requireAdmin), asyncHandler(async (req, res) => {
   try {
     const config = await dbService.getVimeoConfig();
     if (!config.accessToken || !config.clientId || !config.clientSecret) {
@@ -4929,10 +3597,10 @@ app.get("/api/admin/vimeo/my-videos", requireAdmin, async (req, res) => {
     console.error("[vimeo/my-videos] erro:", err);
     return res.status(500).json({ error: "Erro ao buscar vídeos da conta Vimeo." });
   }
-});
+}));
 
 // Fetch Vimeo Video Details via Vimeo API (somente usuários autenticados + rate limit)
-app.post("/api/vimeo/info", vimeoInfoRateLimiter, authenticateUser, async (req, res) => {
+app.post("/api/vimeo/info", vimeoInfoRateLimiter, asyncHandler(authenticateUser), asyncHandler(async (req, res) => {
   try {
     const { videoInput } = req.body;
     if (!videoInput) {
@@ -5027,7 +3695,7 @@ app.post("/api/vimeo/info", vimeoInfoRateLimiter, authenticateUser, async (req, 
   } catch (err: any) {
     return res.status(500).json({ error: "Falha ao obter informações do vídeo." });
   }
-});
+}));
 
 
 // Qualquer /api/* sem rota correspondente => 404 JSON (nunca o fallback HTML da SPA)
@@ -5041,6 +3709,8 @@ app.use("/api", (req, res) => {
 app.use((err: any, req: any, res: any, next: any) => {
   if (res.headersSent) return next(err);
   if (!String(req.path || "").startsWith("/api/")) return next(err);
+  if (err?.type === "entity.parse.failed") return res.status(400).json({ error: "JSON inválido." });
+  if (err?.type === "entity.too.large") return res.status(413).json({ error: "Conteúdo excede o limite permitido." });
   const msg = String(err?.message || "");
   if (err && (err.name === "MulterError" || err.code === "LIMIT_FILE_SIZE" || /malformed|unexpected field|part/i.test(msg))) {
     return res.status(400).json({ error: "Upload inválido ou corrompido." });
@@ -5104,11 +3774,12 @@ async function start() {
 
     // Guarda: nunca servir arquivos sensíveis que estejam dentro de dist/
     // (server.cjs, sourcemaps, docs, envs, sql, logs, db.json...)
-    const SENSITIVE_STATIC = /\.(cjs|map|md|sql|bat|log|env|ts|tsx|pem|key)$/i;
+    const SENSITIVE_STATIC = /\.(cjs|map|md|sql|bat|log|env|ts|tsx|pem|key|zip)$/i;
     const SENSITIVE_NAMES = new Set([
       "server.cjs", "server.cjs.map", "db.json", "package.json", "package-lock.json",
       "metadata.json", "estado_plataforma.md", "AGENTS.md", "DOCUMENTACAO.md",
-      "CORRECOES-SEGURANCA.md", "supabase_schema.sql", "supabase-security-fix.sql",
+      "CORRECOES-SEGURANCA.md", "Vulnerabilidades.txt", "Correcoes-Seguranca.txt",
+      "supabase_schema.sql", "supabase-security-fix.sql",
       ".env", ".env.example", "dev-server.bat", "dev-server.log", "dev-server.err.log"
     ]);
     app.use((req, res, next) => {
@@ -5119,7 +3790,7 @@ async function start() {
         return res.status(404).send("Not Found");
       }
       const base = pathname.split("/").pop() || "";
-      if (SENSITIVE_STATIC.test(pathname) || SENSITIVE_NAMES.has(base) || base.startsWith(".")) {
+      if (SENSITIVE_STATIC.test(pathname) || SENSITIVE_NAMES.has(base) || pathname.split("/").some(part => part.startsWith("."))) {
         return res.status(404).send("Not Found");
       }
       next();
@@ -5133,20 +3804,17 @@ async function start() {
   // "::" = dual-stack (IPv6 + IPv4): sem isso, "localhost" (que resolve para
   // ::1 no Windows) faz o navegador tentar IPv6 primeiro e esperar ~19s de
   // retransmissões de SYN antes de cair para IPv4 (view parecia travada).
-const server = app.listen(PORT, "::", () => {
+const server = app.listen(PORT, isProduction ? "::" : "127.0.0.1", () => {
     console.log(`Server successfully started on http://0.0.0.0:${PORT}`);
   });
 
   // Agendadores diários:
   // 1. API Nipponflex: roda às 02:30 (horário de Brasília).
-  // 2. Backup do Suporte: roda às 22:00 (horário de Brasília).
   carregarEstadoInicial().then(() => {
     verificarAgendador();
-    verificarAgendadorBackupSuporte();
   });
   setInterval(() => {
     verificarAgendador().catch((e) => console.error("[Nipponflex] erro no agendador:", e));
-    verificarAgendadorBackupSuporte().catch((e) => console.error("[Suporte Backup] erro no agendador:", e));
   }, 60_000);
 
   // Request timeout unlimited (large uploads), but keep-alive com teto contra
@@ -5155,10 +3823,10 @@ const server = app.listen(PORT, "::", () => {
   // morre em silêncio e o Chrome só percebe ~19s depois (view parecia travada,
   // fallback do Suspense preso). 60s é o valor padrão da comunidade: navegadores
   // reutilizam sockets por até ~60s; acima disso eles abrem conexão nova mesmo.
-  server.setTimeout(0);
+  server.setTimeout(120000);
+  server.requestTimeout = 120000;
   server.keepAliveTimeout = 60000;
   server.headersTimeout = 66000;
 }
 
-start();
-
+if (process.env.FENIX_AUTOSTART !== "0") start();

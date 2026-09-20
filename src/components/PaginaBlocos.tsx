@@ -3,6 +3,7 @@ import { Zap, Sparkles, Activity, Atom, Flame, Waves, Award, CheckCircle2, UserP
 import type { PaginaBloco, PaginaBlocoCampos } from "../types";
 import QueroFazerParteModal from "./QueroFazerParteModal";
 import EliteMilionarioModal from "./EliteMilionarioModal";
+import { imageVariant, imageSources } from "../utils/imageVariants";
 
 // Ícones ilustrativos (limpos, usados de forma elegante e pequena).
 const ICONES: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -36,7 +37,9 @@ function BlocoImg({ src, alt, className }: { src?: string; alt?: string; classNa
   const final = errou || !src ? FALLBACK_IMG : src;
   return (
     <img
-      src={final}
+      src={imageVariant(final, 1600)}
+      srcSet={imageSources(final, [640, 960, 1600])}
+      sizes="(min-width: 1024px) calc(100vw - 256px), 100vw"
       alt={alt || ""}
       loading="lazy"
       decoding="async"

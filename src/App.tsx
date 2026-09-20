@@ -2,6 +2,7 @@ import React, { useEffect, useState, lazy, Suspense } from "react";
 import { useStore } from "./store";
 import Sidebar from "./components/Sidebar";
 import Footer from "./components/Footer";
+import { startPageNavigation } from "./navigation";
 
 // View components — code-split (lazy) to keep the initial bundle light.
 // Heavy views (AdminView, FenixSocialView e afins) só carregam quando acessados.
@@ -102,10 +103,15 @@ useEffect(() => {
       setActiveView("moderacao-fenix");
     }
 
+    const stopNavigation = !isAdminSubdomain && !isSupportSubdomain && path !== "/adminfenix"
+      ? startPageNavigation()
+      : undefined;
+
     // Validate session on mount
     fetchUser();
     // Cache public contents
     fetchPublicData();
+    return stopNavigation;
   }, []);
 
   const renderActiveView = () => {

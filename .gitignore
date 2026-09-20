@@ -13,7 +13,10 @@ tail.txt
 auditoria_seguranca.txt
 
 # Builds
+Lixo/
+.support-test-runtime/
 dist/
+.admin-preview/
 dev-server.*
 dev-tools/
 

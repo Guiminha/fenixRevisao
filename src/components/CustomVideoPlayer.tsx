@@ -43,6 +43,19 @@ export default function CustomVideoPlayer({ src, poster, title, autoPlay = false
 
     let hls: any = null;
     let cancelled = false;
+    let fellBack = false;
+    const directPlayback = () => {
+      if (cancelled || fellBack) return;
+      const parsed = new URL(src, window.location.origin);
+      const key = parsed.searchParams.get("key");
+      if (parsed.origin !== window.location.origin || parsed.pathname !== "/api/storage/hls/master.m3u8" || !key) return;
+      fellBack = true;
+      if (hls) { hls.destroy(); hls = null; }
+      video.src = `/api/storage/stream/${encodeURIComponent(key)}`;
+      video.load();
+      if (autoPlay) video.play().catch(() => {});
+    };
+    video.addEventListener("error", directPlayback);
 
     const setup = async () => {
       if (src.includes(".m3u8")) {
@@ -61,6 +74,9 @@ export default function CustomVideoPlayer({ src, poster, title, autoPlay = false
               video.play().catch(() => {});
             }
           });
+          hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal: boolean }) => {
+            if (data.fatal) directPlayback();
+          });
         } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = src;
           if (autoPlay) video.play().catch(() => {});
@@ -71,10 +87,11 @@ export default function CustomVideoPlayer({ src, poster, title, autoPlay = false
       }
     };
 
-    setup();
+    setup().catch(directPlayback);
 
     return () => {
       cancelled = true;
+      video.removeEventListener("error", directPlayback);
       if (hls) {
         hls.destroy();
       }

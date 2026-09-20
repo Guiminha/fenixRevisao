@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useStore } from "../store";
 import QueroFazerParteModal from "./QueroFazerParteModal";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, type Variants } from "motion/react";
 import { 
   Home, 
   Users, 
@@ -104,7 +104,6 @@ export default function Sidebar() {
     { id: "fenix-social", label: "Fênix Social", icon: Flame },
     { id: "suporte", label: "Suporte", icon: LifeBuoy },
     { id: "paginas", label: "Páginas", icon: FileText },
-    { id: "backup", label: "Backup & Restauração", icon: ShieldCheck },
     { id: "servidores", label: "Servidores Externos", icon: Server }
   ];
 
@@ -121,7 +120,7 @@ export default function Sidebar() {
       },
     };
 
-    const itemVariants = {
+    const itemVariants: Variants = {
       hidden: { opacity: 0, x: -14 },
       show: { opacity: 1, x: 0, transition: { duration: 0.45, ease: [0.16, 1, 0.3, 1] } },
     };

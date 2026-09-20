@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import JSZip from "jszip";
 import { dbService, getSupabaseTrustedClient } from "./db.js";
+import { supportAction } from "./supportRepository.js";
 import { getActiveStorageClient, ensureBucketExists, withTimeout, STORAGE_BUCKET } from "./storageService.js";
 
 export const BACKUP_PREFIX = "backups-site/";
@@ -146,9 +147,15 @@ async function collectCoreData(): Promise<{ config: { key: string; value: unknow
   }
   const { data: config, error: configErr } = await trusted.from("config").select("*").order("key");
   if (configErr) throw new Error(`Erro ao ler as configurações: ${configErr.message}`);
+  // Keep the backup format compatible, but snapshot the live relational records,
+  // never the read-only legacy JSON retained in config after migration.
+  const liveTickets = await dbService.getSupportTickets();
+  const configSnapshot = ((config as any[]) || []).filter(c => c.key !== "supportTickets")
+    .map(c => ({ key: c.key, value: c.value }));
+  configSnapshot.push({ key: "supportTickets", value: liveTickets });
   const contas = await collectAuthUsers();
   return {
-    config: ((config as any[]) || []).map((c) => ({ key: c.key, value: c.value })),
+    config: configSnapshot,
     tabelas: dados,
     contas
   };
@@ -760,13 +767,18 @@ function parseAndValidateSnapshot(buffer: Buffer): any {
   return snapshot;
 }
 
-async function applyConfigUpserts(configRows: { key: string; value: unknown }[], restaurarConexoes: boolean) {
+async function applyConfigUpserts(configRows: { key: string; value: unknown }[], restaurarConexoes: boolean, mesclar: boolean) {
   const trusted = getSupabaseTrustedClient();
   if (!trusted) throw new Error("Supabase indisponível para a restauração.");
   const aplicadas: string[] = [];
   const ignoradas: string[] = [];
   for (const row of configRows) {
     if (!row || typeof row.key !== "string" || row.value === undefined) continue;
+    if (row.key === "supportTickets") {
+      await supportAction(trusted, "restore", { tickets: row.value, merge: mesclar });
+      aplicadas.push(row.key);
+      continue;
+    }
     if (!restaurarConexoes && CONFIG_KEY_CONEXOES.includes(row.key)) {
       ignoradas.push(row.key);
       continue;
@@ -905,7 +917,7 @@ export async function restoreSiteBackup(opts: {
     const aplicado: string[] = [];
     try {
       // 2) Configurações
-      const { aplicadas, ignoradas } = await applyConfigUpserts(dados.config || [], restaurarConexoes);
+      const { aplicadas, ignoradas } = await applyConfigUpserts(dados.config || [], restaurarConexoes, mesclar);
       aplicado.push("configs");
 
       // 3) Tabelas (exata: retorno ao estado da save; mesclada: preserva o que veio depois)

@@ -1,0 +1,68 @@
+RELATÓRIO DE OTIMIZAÇÃO — PLATAFORMA FÊNIX
+
+RESULTADO MEDIDO
+Dados transferidos na abertura: 2.693.190 bytes antes; 938.359 bytes depois.
+Redução aproximada: 65,2% (2,69 MB para 0,94 MB, unidades decimais).
+Banners na abertura: 5 antes; 2 depois (atual e próximo).
+Dados dos banners: 1.256.737 bytes antes; 219.493 bytes depois.
+Redução nos banners: 82,5%.
+JSON inicial sem compressão: 101.291 bytes antes; 84.207 bytes depois.
+
+TEMPO: LIMITAÇÃO IMPORTANTE
+Mediana do LCP (exibição do maior elemento visível): 1.248 ms antes e 1.740 ms
+na medição final. Portanto, não foi comprovada melhora de tempo neste ambiente;
+essa métrica ficou cerca de 39% maior, apesar da redução consistente de tráfego.
+A mediana da primeira exibição de conteúdo (FCP) passou de 212 para 208 ms,
+diferença pequena, insuficiente para concluir um ganho significativo.
+As respostas da VPS às verificações de mídia continuam contribuindo para a espera.
+Não foram relaxadas as permissões para melhorar artificialmente esses números.
+
+MÉTODO
+Três aberturas antes e três após a versão final, no Edge sem janela, em contextos
+novos sem cache do navegador, resolução 1365 x 768. Medição nos primeiros seis
+segundos, antes da troca automática do banner. Servidor Express local na porta
+3001; banco, armazenamento e Vimeo remotos. Servidor previamente exercitado pelos
+testes, com cache de recursos. Os números acima são medianas. Não representam
+uma medição de produção nem uma simulação de conexão móvel limitada.
+Os bytes foram medidos pela rede do navegador, incluindo recursos comprimidos.
+A análise anterior havia somado corpos descomprimidos; por isso este relatório
+usa uma nova linha de base comparável, de 2,69 MB em vez de aproximadamente 3 MB.
+
+ALTERAÇÕES IMPLEMENTADAS
+- Carrossel carrega a imagem atual e a próxima; mantém a anterior na transição.
+- Previews do Storage oferecem tamanhos limitados e WebP com proporção preservada.
+- Originais permanecem intactos; downloads explícitos não são convertidos.
+- Capas continuam exclusivamente do Vimeo, selecionando uma resolução oficial
+  adequada aos cards, em vez da maior imagem disponível.
+- Home deixa os blocos institucionais para carregar quando a página for aberta.
+- Consulta pública deixa de ler logs e configurações privadas desnecessárias.
+- Eliminada consulta integral duplicada para obter categorias de materiais.
+- Cache de conteúdo público ampliado, com invalidação após alterações administrativas.
+- Requisições públicas simultâneas compartilham a mesma consulta em andamento.
+- Endereço público das capas reutilizado por 60 segundos no servidor.
+- Consultas independentes de metadados de imagens executadas em paralelo.
+- Compartilhamento de consultas simultâneas não conserva decisões de autorização:
+  a próxima leitura após a conclusão consulta novamente as permissões no banco.
+- Cards observam apenas o estado necessário do progresso, evitando renderizações extras.
+- Fontes, textos e formatação do Hero foram preservados.
+
+VALIDAÇÃO
+- Compilação de produção e TypeScript aprovados.
+- Comparação integral do conteúdo público com a versão anterior: idêntico.
+- 74 cursos/treinamentos e 23 materiais preservados.
+- Blocos de Grupo Fênix, Tecnologias e Elite preservados.
+- Navegação, URLs diretas, atualização e Voltar/Avançar aprovados.
+- Telas protegidas e subdomínios administrativos e de suporte verificados.
+- Sessão de membro simulada para testar navegação sem criar registros no banco.
+- Carrossel no celular, páginas sob demanda e recuperação de falha aprovados.
+- Downloads de imagem comparados byte a byte com os originais: idênticos.
+- PDFs e imagens inválidas não são alterados pela conversão.
+- Proporção e transparência verificadas em teste de imagem.
+- Mudanças de permissão reconhecidas na consulta seguinte em teste isolado.
+- Arquivos privados referenciados por cursos permanecem privados mesmo em pasta pública.
+- Capas do Vimeo exibidas; nenhuma requisição ao Unsplash no teste de navegador.
+
+DISPONIBILIDADE
+Aplicação acessível em http://localhost:3001.
+Atualizar a aba com Ctrl + F5 para receber os arquivos novos.
+Nenhuma política RLS, registro de conteúdo ou arquivo original do Storage foi alterado.

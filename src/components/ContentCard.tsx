@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Film, Image as ImageIcon, FileText, GraduationCap } from "lucide-react";
 import { useStore } from "../store";
+import { imageVariant, imageSources } from "../utils/imageVariants";
 
 function formatDataLive(value?: string): string {
   if (!value) return "";
@@ -51,12 +52,12 @@ export default function ContentCard({
   professorEspecialidade,
   dataLive
 }: ContentCardProps) {
-  const { completedLessons } = useStore();
+  const completedLessons = useStore(state => state.completedLessons);
 
   const [thumbErro, setThumbErro] = useState(false);
   const [profErro, setProfErro] = useState(false);
 
-  const FALLBACK_THUMB = "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=800&q=80";
+  useEffect(() => setThumbErro(false), [imagem]);
 
   // Determine media icon
   const getMediaIcon = () => {
@@ -103,14 +104,17 @@ export default function ContentCard({
       {/* Thumbnail Container */}
       <div className="relative aspect-video overflow-hidden bg-[#161c26]/50">
         {/* Thumbnail Image */}
-        <img
-          src={thumbErro ? FALLBACK_THUMB : (imagem || FALLBACK_THUMB)}
+        {!thumbErro && imagem ? <img
+          src={imageVariant(imagem, 640)}
+          srcSet={imageSources(imagem, [320, 640, 960])}
+          sizes="(max-width: 639px) 50vw, (max-width: 1023px) 33vw, 25vw"
           alt={titulo || "Conteúdo"}
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-108"
           loading="lazy"
+          decoding="async"
           onError={() => setThumbErro(true)}
-        />
+        /> : <div className="w-full h-full flex items-center justify-center text-[#8a96a3] text-sm" role="img" aria-label="Capa indisponível">Capa indisponível</div>}
 
         {/* Top Left Badges */}
         <div className="absolute top-2.5 left-2.5 flex flex-col gap-1 z-10">

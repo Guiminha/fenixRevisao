@@ -165,6 +165,7 @@ export default function SupportApp() {
   const [loginError, setLoginError] = useState<string | null>(null);
   // Modal de "defina a sua senha de acesso" (1º acesso ou após redefinição do admin)
   const [pwModalOpen, setPwModalOpen] = useState(false);
+  const [pwAtual, setPwAtual] = useState("");
   const [pwNovaSenha, setPwNovaSenha] = useState("");
   const [pwConfirma, setPwConfirma] = useState("");
   const [pwLoading, setPwLoading] = useState(false);
@@ -351,7 +352,7 @@ export default function SupportApp() {
         setLoginError(res.error || "Credenciais inválidas.");
         return;
       }
-      if (user?.role !== "support") {
+      if (useStore.getState().user?.role !== "support") {
         setLoginError("Esta conta não possui acesso à área de suporte. Área exclusiva dos responsáveis cadastrados.");
         return;
       }
@@ -374,7 +375,7 @@ export default function SupportApp() {
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    const nova = pwNovaSenha.trim();
+    const nova = pwNovaSenha;
     if (nova.length < 8 || !/[a-zA-Z]/.test(nova) || !/[0-9]/.test(nova)) {
       setPwError("A senha deve ter no mínimo 8 caracteres, com letras e números.");
       return;
@@ -385,7 +386,7 @@ export default function SupportApp() {
     }
     setPwLoading(true);
     setPwError(null);
-    const res = await changeSupportPassword(nova);
+    const res = await changeSupportPassword(nova, pwAtual);
     setPwLoading(false);
     if (!res.success) {
       setPwError(res.error || "Erro ao alterar a senha. Tente novamente.");
@@ -393,6 +394,7 @@ export default function SupportApp() {
     }
     notify("success", "Senha atualizada com sucesso.");
     setPwModalOpen(false);
+    setPwAtual("");
     setPwNovaSenha("");
     setPwConfirma("");
   };
@@ -1468,6 +1470,10 @@ export default function SupportApp() {
               </div>
             </div>
             <form onSubmit={handleChangePassword} className="space-y-4">
+              <div className="space-y-1.5">
+                <label htmlFor="support-current-password" className="text-xs font-bold text-[#e8edf2] uppercase tracking-wider font-display">Senha atual ou temporária</label>
+                <input id="support-current-password" type="password" autoComplete="current-password" value={pwAtual} onChange={e => setPwAtual(e.target.value)} required className="w-full bg-[#0b0f14] border border-white/10 rounded-xl px-4 py-3 text-sm text-white" />
+              </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-[#e8edf2] uppercase tracking-wider font-display">Nova senha</label>
                 <input

@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { defaultData, defaultTecnologias } from "../defaultData";
+import { supportAction, type SupportMutationResult } from "./supportRepository.js";
 
 const DB_FILE = process.env.DB_FILE_PATH || path.join(process.cwd(), "data", "db.json");
 
@@ -262,6 +263,7 @@ export interface SupportUser {
   // (ou após uma redefinição feita pelo admin). Definido no cadastro/reset,
   // limpo quando o responsável troca a senha.
   mustChangePassword?: boolean;
+  sessionVersion?: string;
 }
 
 export type PaginaBlocoTipo = "banner" | "hero_header" | "card_tecnologia" | "texto" | "imagem" | "destaque" | "cta" | "hero_banner" | "lista" | "faq";
@@ -431,7 +433,9 @@ export function getSupabaseClient(userToken?: string): SupabaseClient | null {
       console.error("[Supabase] Erro ao criar cliente com token do usuário:", e);
     }
   }
-  return supabase;
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
 }
 
 /**
@@ -625,9 +629,7 @@ class DBService {
       if (!this.data.paginaElite) this.data.paginaElite = [];
       if (!this.data.paginaBiografia) this.data.paginaBiografia = [];
       if (!this.data.diCodes) {
-        this.data.diCodes = [
-          { id: "di-1", codigo: "DI-654321", descricao: "Acesso Geral Padrão D.I.", ativo: true, createdAt: new Date().toISOString(), criadoPor: "Sistema" }
-        ];
+        this.data.diCodes = [];
       }
       return this.data;
     }
@@ -646,18 +648,14 @@ class DBService {
 if (!this.data.paginaElite) this.data.paginaElite = [];
         if (!this.data.paginaBiografia) this.data.paginaBiografia = [];
         if (!this.data.diCodes) {
-          this.data.diCodes = [
-            { id: "di-1", codigo: "DI-654321", descricao: "Acesso Geral Padrão D.I.", ativo: true, createdAt: new Date().toISOString(), criadoPor: "Sistema" }
-          ];
+          this.data.diCodes = [];
         }
       } else {
         this.data = { ...defaultData };
         this.data.deletedNovidadeIds = [];
         this.data.deletedCursoIds = [];
         this.data.deletedMaterialIds = [];
-        this.data.diCodes = [
-          { id: "di-1", codigo: "DI-654321", descricao: "Acesso Geral Padrão D.I.", ativo: true, createdAt: new Date().toISOString(), criadoPor: "Sistema" }
-        ];
+        this.data.diCodes = [];
         this.saveLocal();
       }
     } catch (e) {
@@ -681,7 +679,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     }
   }
 
-  public async getData(userToken?: string, trusted = false): Promise<DBData> {
+  public async getData(userToken?: string, trusted = false, scope: 'all' | 'public' | 'home' = 'all'): Promise<DBData> {
     const isSupabase = await this.ensureInitialized();
     const client = trusted ? getSupabaseTrustedClient(userToken) : getSupabaseClient(userToken);
     const local = this.loadLocal();
@@ -715,13 +713,23 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
         auditLogsRes,
         configRes
       ] = await Promise.all([
-        Promise.resolve(client.from("leader_bio").select("*").eq("id", "main").maybeSingle()).catch(() => ({ data: null, error: null })),
-        Promise.resolve(client.from("novidades").select("*").order("created_at", { ascending: false })).catch(() => ({ data: null, error: null })),
-        Promise.resolve(client.from("cursos").select("*")).catch(() => ({ data: null, error: null })),
-        Promise.resolve(client.from("materiais").select("*")).catch(() => ({ data: null, error: null })),
-        Promise.resolve(client.from("audit_logs").select("*").order("timestamp", { ascending: false }).limit(100)).catch(() => ({ data: null, error: null })),
-        Promise.resolve(client.from("config").select("*")).catch(() => ({ data: null, error: null }))
+        Promise.resolve(client.from("leader_bio").select("*").eq("id", "main").maybeSingle()).catch(error => ({ data: null, error })),
+        Promise.resolve(client.from("novidades").select("*").order("created_at", { ascending: false })).catch(error => ({ data: null, error })),
+        Promise.resolve(client.from("cursos").select("*")).catch(error => ({ data: null, error })),
+        Promise.resolve(client.from("materiais").select("*")).catch(error => ({ data: null, error })),
+        scope === 'all' ? Promise.resolve(client.from("audit_logs").select("*").order("timestamp", { ascending: false }).limit(100)).catch(() => ({ data: null, error: null })) : Promise.resolve({ data: [], error: null }),
+        scope === 'all' ? Promise.resolve(client.from("config").select("*")).catch(() => ({ data: null, error: null }))
+          : client.from("config").select("key,value").in('key', [
+            'logoUrl', 'categoriasMateriais', 'banners', 'hiddenHomeCardIds',
+            ...(scope === 'public' ? ['paginaTecnologias', 'paginaElite', 'paginaBiografia'] : []),
+          ])
       ]);
+
+      if (scope !== 'all') {
+        for (const result of [leaderBioRes, novidadesRes, cursosRes, materiaisRes, configRes]) {
+          if (result?.error) throw result.error;
+        }
+      }
 
       const leaderBioData = leaderBioRes?.data;
       const novidadesData = novidadesRes?.data;
@@ -935,8 +943,10 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
       };
 
       // Cache the successfully fetched data in memory (never on disk in SUPABASE_ONLY mode)
-      this.data = mergedData;
-      this.saveLocal();
+      if (scope === 'all') {
+        this.data = mergedData;
+        this.saveLocal();
+      }
 
       return mergedData;
     } catch (err) {
@@ -1154,7 +1164,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
   }
 
   public async getCursos(userToken?: string): Promise<Curso[]> {
-    const data = await this.getData(userToken);
+    const data = await this.getData(userToken, true);
     return data.cursos;
   }
 
@@ -1272,7 +1282,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
   }
 
   public async getMateriais(userToken?: string): Promise<Material[]> {
-    const data = await this.getData(userToken);
+    const data = await this.getData(userToken, true);
     return data.materiais;
   }
 
@@ -1647,52 +1657,18 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
   }
 
   public async validateDICode(code: string): Promise<{ valid: boolean; role?: string; userCode?: string; name?: string; message?: string }> {
-    const raw = code.trim();
-    const formattedInput = raw.toUpperCase();
-
-    // ------------------------------------------------------------------
-    // 1. Fonte principal: tabela dis_fenix (cadastros vindos da API Nipponflex)
-    //    Valida o código e a SITUAÇÃO (somente situações permitidas logam).
-    // ------------------------------------------------------------------
-    try {
-      const client = getSupabaseTrustedClient();
-      if (client) {
-        const { data: di, error } = await client.from("dis_fenix").select("codigo, nome, situacao").eq("codigo", formattedInput).maybeSingle();
-        if (!error && di) {
-          // Situações permitidas (config; padrão: só Ativo "A")
-          const { data: cfg } = await client.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
-          const permitidas: string[] = Array.isArray(cfg?.value) ? cfg.value : ["A"];
-          const situacao = String(di.situacao || "I").toUpperCase();
-
-          if (!permitidas.includes(situacao)) {
-            console.warn(`[D.I.] ${di.codigo} encontrado mas situação "${situacao}" não está nas permitidas.`);
-            return { valid: false, message: "Cadastro encontrado, porém a situação atual não permite acesso no momento." };
-          }
-          return { valid: true, role: "user", userCode: di.codigo, name: di.nome || di.codigo };
-        }
-      }
-    } catch (e) {
-      console.warn("[D.I.] Falha ao consultar dis_fenix:", e);
-    }
-
-    // ------------------------------------------------------------------
-    // 2. Fallback legado: config.diCodes (códigos manuais/fictícios p/ teste)
-    // ------------------------------------------------------------------
-    const formattedWithPrefix = formattedInput.startsWith("DI-") ? formattedInput : `DI-${formattedInput}`;
-    const registeredList = await this.getDICodes();
-    const found = registeredList.find(d =>
-      (d.codigo.toUpperCase() === formattedInput || d.codigo.toUpperCase() === formattedWithPrefix || d.codigo.replace("DI-", "") === formattedInput)
-    );
-    if (found) {
-      if (!found.ativo) {
-        console.warn(`[D.I.] Código ${found.codigo} existe mas está desativado (resposta uniforme por anti-enumeração).`);
-        return { valid: false, message: "Código D. I. não encontrado. Verifique o seu código." };
-      }
-      const isAdmin = found.codigo.toUpperCase().startsWith("DI-ADMIN-");
-      return { valid: true, role: isAdmin ? "admin" : "user", userCode: found.codigo, name: found.descricao || found.codigo };
-    }
-
-    return { valid: false, message: "Código D. I. não encontrado. Verifique o seu código." };
+    const denied = { valid: false, message: "Credenciais inválidas ou acesso não permitido." };
+    if (typeof code !== "string" || !/^\d{4,6}$/.test(code)) return denied;
+    const client = getSupabaseTrustedClient();
+    if (!client) throw new Error("Autenticação indisponível.");
+    const { data: di, error } = await client.from("dis_fenix").select("codigo, nome, situacao").eq("codigo", code).maybeSingle();
+    if (error) throw error;
+    if (!di) return denied;
+    const { data: cfg, error: cfgError } = await client.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
+    if (cfgError) throw cfgError;
+    const allowed: string[] = Array.isArray(cfg?.value) ? cfg.value : ["A"];
+    if (!allowed.includes(String(di.situacao || "I").toUpperCase())) return denied;
+    return { valid: true, role: "user", userCode: di.codigo, name: di.nome || di.codigo };
   }
 
   private addLocalAuditLog(usuario: string, acao: string, detalhes: string): void {
@@ -1712,129 +1688,47 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
 
   // ---------------- SUPORTE POR TICKETS (append-only, histórico imutável) ----------------
 
-  private async persistSupportTickets(tickets: SupportTicket[], user: string, acao: string, detalhes: string, userToken?: string): Promise<{ success: boolean; error?: string }> {
-    const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseTrustedClient(userToken);
-    if (isSupabase && client) {
-      const { error: upErr } = await client.from("config").upsert({ key: "supportTickets", value: tickets });
-      if (upErr) {
-        console.error("[Supabase] supportTickets upsert error:", upErr.message);
-        return { success: false, error: `Não foi possível salvar no banco de dados: ${upErr.message}` };
-      }
-      await this.addAuditLog(user, acao, detalhes, userToken);
+  private async supportMutation(action: string, payload: unknown, actor: string, auditAction: string, userToken?: string): Promise<SupportMutationResult> {
+    try {
+      const ticket = await supportAction<SupportTicket>(getSupabaseTrustedClient(userToken), action, payload);
+      // The database commit is authoritative. An audit outage must not report a
+      // successful ticket insert as failed and invite a duplicate retry.
+      await this.addAuditLog(actor, auditAction, `Chamado #${ticket.numero}`, userToken).catch(() => {});
+      return { success: true, ticket };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Suporte indisponível." };
     }
-    const data = this.loadLocal();
-    data.supportTickets = tickets;
-    this.addLocalAuditLog(user, acao, detalhes);
-    this.saveLocal();
-    return { success: true };
   }
 
   public async getSupportTickets(userToken?: string): Promise<SupportTicket[]> {
-    const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseTrustedClient(userToken);
-    if (isSupabase && client) {
-      try {
-        const { data: config } = await client.from("config").select("value").eq("key", "supportTickets").maybeSingle();
-        if (config && Array.isArray(config.value)) {
-          return (config.value as SupportTicket[]).sort((a, b) => b.numero - a.numero);
-        }
-      } catch (err) {
-        console.error("[Supabase] getSupportTickets error:", err);
-      }
-    }
-    const data = this.loadLocal();
-    return (data.supportTickets || []).sort((a, b) => b.numero - a.numero);
+    return supportAction<SupportTicket[]>(getSupabaseTrustedClient(userToken), "list");
   }
 
   public async getSupportTicket(id: string, userToken?: string): Promise<SupportTicket | null> {
-    const tickets = await this.getSupportTickets(userToken);
-    return tickets.find(t => t.id === id) || null;
+    return supportAction<SupportTicket | null>(getSupabaseTrustedClient(userToken), "get", { id });
   }
 
   public async createSupportTicket(
     data: { assunto: string; texto: string; anexos?: SupportAnexo[] },
     requester: { code: string; name: string },
     userToken?: string
-  ): Promise<{ success: boolean; ticket?: SupportTicket; error?: string }> {
-    const current = await this.getSupportTickets(userToken);
-    const nextNumero = current.reduce((max, t) => Math.max(max, t.numero || 0), 0) + 1;
-    const now = new Date().toISOString();
-    const ticket: SupportTicket = {
-      id: `st-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-      numero: nextNumero,
-      assunto: data.assunto.trim(),
-      status: "aberto",
-      criadoPor: requester.code,
-      criadoPorNome: requester.name || requester.code,
-      criadoEm: now,
-      atualizadoEm: now,
-      mensagens: [
-        {
-          id: `sm-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          tipo: "di",
-          autorNome: requester.name || requester.code,
-          autorRef: requester.code,
-          texto: data.texto.trim(),
-          criadoEm: now,
-          anexos: data.anexos && data.anexos.length > 0 ? data.anexos : undefined
-        }
-      ]
-    };
-    const updated = [...current, ticket];
-    const persist = await this.persistSupportTickets(updated, requester.code, "SUPORTE_TICKET_ABERTO", `Ticket de suporte #${String(ticket.numero).padStart(4, "0")} aberto por ${requester.name || requester.code}: ${ticket.assunto}`, userToken);
-    if (!persist.success) return { success: false, error: persist.error };
-    return { success: true, ticket };
+  ): Promise<SupportMutationResult> {
+    return this.supportMutation("create", {
+      id: crypto.randomUUID(), messageId: crypto.randomUUID(),
+      assunto: data.assunto.trim(), texto: data.texto.trim(), anexos: data.anexos || [],
+      actor: requester.code, actorName: requester.name || requester.code
+    }, requester.code, "SUPORTE_TICKET_ABERTO", userToken);
   }
 
   public async addSupportMessage(
     ticketId: string,
     data: { tipo: "di" | "suporte"; autorNome: string; autorRef: string; texto: string; anexos?: SupportAnexo[] },
     userToken?: string
-  ): Promise<{ success: boolean; ticket?: SupportTicket; error?: string }> {
-    const current = await this.getSupportTickets(userToken);
-    const index = current.findIndex(t => t.id === ticketId);
-    if (index === -1) return { success: false, error: "Chamado não encontrado." };
-    const ticket = current[index];
-    if (ticket.status === "fechado" || ticket.status === "resolvido" || ticket.status === "arquivado") {
-      return { success: false, error: "Este chamado está encerrado. Apenas reabrir para adicionar mensagem." };
-    }
-    if (!data.texto?.trim() && (!data.anexos || data.anexos.length === 0)) {
-      return { success: false, error: "Escreva a mensagem ou anexe um arquivo." };
-    }
-
-    const now = new Date().toISOString();
-    let smId = `sm-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-    while (ticket.mensagens.some(m => m.id === smId)) {
-      smId = `sm-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-    }
-    if (data.anexos) {
-      const aIds = new Set(ticket.mensagens.flatMap(m => (m.anexos || []).map(a => a.id)));
-      data.anexos.forEach(a => {
-        while (aIds.has(a.id)) a.id = `${a.id}-${Math.random().toString(36).substr(2, 4)}`;
-        aIds.add(a.id);
-      });
-    }
-    ticket.mensagens.push({
-      id: smId,
-      tipo: data.tipo,
-      autorNome: data.autorNome,
-      autorRef: data.autorRef,
-      texto: data.texto.trim(),
-      criadoEm: now,
-      anexos: data.anexos && data.anexos.length > 0 ? data.anexos : undefined
-    });
-    ticket.atualizadoEm = now;
-    if (data.tipo === "di" && ticket.status === "aguardando_resposta") {
-      ticket.status = "aberto";
-    } else if (data.tipo === "suporte" && (ticket.status === "aberto" || ticket.status === "em_andamento" || ticket.status === "aguardando_resposta")) {
-      ticket.status = "aguardando_resposta";
-    }
-    current[index] = ticket;
-
-    const persist = await this.persistSupportTickets(current, data.autorRef, "SUPORTE_MENSAGEM", `Nova mensagem no chamado #${String(ticket.numero).padStart(4, "0")} (${data.tipo}): ${(data.texto.trim() || "Anexos").slice(0, 120)}`, userToken);
-    if (!persist.success) return { success: false, error: persist.error };
-    return { success: true, ticket };
+  ): Promise<SupportMutationResult> {
+    return this.supportMutation("message", {
+      id: ticketId, messageId: crypto.randomUUID(), tipo: data.tipo,
+      actor: data.autorRef, actorName: data.autorNome, texto: data.texto.trim(), anexos: data.anexos || []
+    }, data.autorRef, "SUPORTE_MENSAGEM", userToken);
   }
 
   public async setSupportTicketStatus(
@@ -1842,42 +1736,20 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     status: SupportTicketStatus,
     by: { ref: string; name: string; tipo: "suporte" | "di" },
     userToken?: string
-  ): Promise<{ success: boolean; ticket?: SupportTicket; error?: string }> {
-    const current = await this.getSupportTickets(userToken);
-    const index = current.findIndex(t => t.id === ticketId);
-    if (index === -1) return { success: false, error: "Chamado não encontrado." };
-    const ticket = current[index];
-
-    if (by.tipo === "di") {
-      if (ticket.criadoPor !== by.ref) return { success: false, error: "Este chamado não pertence a você." };
-      const terminal = ticket.status === "fechado" || ticket.status === "resolvido" || ticket.status === "arquivado";
-      if (status === "aberto") {
-        if (!terminal) return { success: false, error: "Este chamado ainda não foi encerrado ou arquivado." };
-      } else if (status === "fechado" || status === "arquivado") {
-        if (terminal) return { success: false, error: "Este chamado já foi encerrado ou arquivado." };
-      } else {
-        return { success: false, error: "O solicitante só pode encerrar, arquivar ou reabrir o próprio chamado." };
-      }
-    }
-
-    ticket.status = status;
-    if (status === "fechado") {
-      ticket.fechadoEm = new Date().toISOString();
-      ticket.fechadoPor = by.name || by.ref;
-    } else {
-      ticket.fechadoEm = undefined;
-      ticket.fechadoPor = undefined;
-    }
-    ticket.atualizadoEm = new Date().toISOString();
-    current[index] = ticket;
-
-    const persist = await this.persistSupportTickets(current, by.ref, "SUPORTE_STATUS", `Chamado #${String(ticket.numero).padStart(4, "0")} alterado para "${status}" por ${by.name || by.ref}`, userToken);
-    if (!persist.success) return { success: false, error: persist.error };
-    return { success: true, ticket };
+  ): Promise<SupportMutationResult> {
+    return this.supportMutation("status", {
+      id: ticketId, status, actor: by.ref, actorName: by.name || by.ref, tipo: by.tipo
+    }, by.ref, "SUPORTE_STATUS", userToken);
   }
 
   public async clearAllSupportTickets(user: string, userToken?: string): Promise<{ success: boolean; error?: string }> {
-    return this.persistSupportTickets([], user, "SUPORTE_LIMPEZA_TESTE", "Todas as mensagens e chamados de suporte foram resetados para ambiente de testes.", userToken);
+    try {
+      await supportAction(getSupabaseTrustedClient(userToken), "clear");
+      await this.addAuditLog(user, "SUPORTE_LIMPEZA_TESTE", "Chamados de suporte removidos pelo administrador.", userToken).catch(() => {});
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Suporte indisponível." };
+    }
   }
 
   public async getSupportUsers(userToken?: string): Promise<SupportUser[]> {
@@ -1913,7 +1785,8 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
       nome: user.nome.trim(),
       ativo: user.ativo,
       criadoEm: index === -1 ? new Date().toISOString() : current[index].criadoEm,
-      mustChangePassword: mustChange
+      mustChangePassword: mustChange,
+      sessionVersion: crypto.randomUUID()
     };
     if (index === -1) current.push(entry);
     else current[index] = entry;
@@ -1950,7 +1823,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     if (index === -1) {
       return { success: false, error: "Responsável de suporte não encontrado." };
     }
-    current[index] = { ...current[index], mustChangePassword: flag };
+    current[index] = { ...current[index], mustChangePassword: flag, sessionVersion: crypto.randomUUID() };
 
     const isSupabase = await this.ensureInitialized();
     const client = getSupabaseTrustedClient(userToken);
@@ -2096,7 +1969,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
 
   public async getPublicFenixPosts(userToken?: string): Promise<FenixPost[]> {
     const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseClient(userToken) || supabase;
+    const client = getSupabaseTrustedClient(userToken);
     if (isSupabase && client) {
       try {
         const { data, error } = await client.from("fenix_posts").select("*").eq("status", "aprovado").order("created_at", { ascending: false });
@@ -2148,10 +2021,10 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
 
   public async getFenixPostById(id: string, userToken?: string): Promise<FenixPost | null> {
     const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseClient(userToken) || supabase;
+    const client = getSupabaseTrustedClient(userToken);
     if (isSupabase && client) {
       try {
-        const { data, error } = await client.from("fenix_posts").select("*").eq("id", id).maybeSingle();
+        const { data, error } = await client.from("fenix_posts").select("*").eq("id", id).eq("status", "aprovado").maybeSingle();
         if (!error && data) {
           return this.mapFenixPostFromDb(data);
         }
@@ -2159,7 +2032,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     }
     const data = this.loadLocal();
     const posts = data.fenixPosts || [];
-    return posts.find((p) => p.id === id) || null;
+    return posts.find((p) => p.id === id && p.status === "aprovado") || null;
   }
 
   private mapFenixPostFromDb(p: any): FenixPost {

@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import ContentCard from "./ContentCard";
 import LoginModal from "./LoginModal";
 import CustomVideoPlayer from "./CustomVideoPlayer";
+import CourseSupportModal from "./CourseSupportModal";
 import { 
   Play, 
   CheckCircle, 
@@ -14,7 +15,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Award,
-  ExternalLink,
   Lock,
   SkipForward,
   SkipBack
@@ -37,6 +37,8 @@ export default function EscolaFenixView() {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<"cursos" | "hub-marketing">("cursos");
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [supportNotice, setSupportNotice] = useState("");
 
   // Galeria interna: seção aberta em "Ver Todos"
   const [galeriaSecao, setGaleriaSecao] = useState<"cursos" | "treinamentos" | null>(null);
@@ -288,7 +290,7 @@ export default function EscolaFenixView() {
                       allow="autoplay; fullscreen; encrypted-media"
                       allowFullScreen
                       title={activeAula.titulo}
-                      referrerPolicy="no-referrer"
+                      referrerPolicy="strict-origin-when-cross-origin"
                     />
                     {/* Shield no topo: bloqueia clique no logo/"watch on vimeo", sem cobrir os controles */}
                     <div
@@ -569,16 +571,22 @@ export default function EscolaFenixView() {
               <p className="text-[11px] text-[#8a96a3] leading-relaxed">
                 Entre em contato com nossa equipe de suporte para tirar dúvidas pedagógicas ou técnicas.
               </p>
-              <a 
-                href="mailto:suporte@grupofenix.com.br"
+              <button
+                type="button"
+                onClick={() => { setSupportNotice(""); setSupportOpen(true); }}
                 className="text-[11px] font-semibold text-[#d12a62] hover:underline flex items-center gap-1 w-max"
               >
-                suporte@grupofenix.com.br <ExternalLink className="w-3 h-3" />
-              </a>
+                Falar com o suporte
+              </button>
+              {supportNotice && <p role="status" className="text-xs text-emerald-300">{supportNotice}</p>}
             </div>
           </div>
           )}
         </div>
+        {supportOpen && <CourseSupportModal onClose={() => setSupportOpen(false)} onSent={numero => {
+          setSupportOpen(false);
+          setSupportNotice(`Chamado #${String(numero).padStart(4, "0")} enviado ao suporte. Acompanhe pela área de Suporte.`);
+        }} />}
       </div>
     );
   }
