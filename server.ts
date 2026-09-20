@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import fs from "fs";
 import { gzipSync } from "zlib";
+import { compressedAssets } from './src/server/assetCompression.js';
 import { hlsPlaylist, hlsObject, hlsSegment } from "./src/server/hlsService.js";
 import multer from "multer";
 import helmet from "helmet";
@@ -320,8 +321,9 @@ async function lookupIdentity(code: string): Promise<Identity | null> {
 const sessions = new SessionService(JWT_SECRET, lookupIdentity);
 function setSessionCookies(res: any, tokens: { access: string; refresh: string }) {
   const options = { httpOnly: true, secure: isProduction, sameSite: "strict" as const, path: "/" };
-  res.cookie("access_token", tokens.access, { ...options, maxAge: 15 * 60 * 1000 });
-  res.cookie("refresh_token", tokens.refresh, { ...options, maxAge: 7 * 86400000 });
+  // Browser-session cookies; server presence also handles restored browsers/crashes.
+  res.cookie("access_token", tokens.access, options);
+  res.cookie("refresh_token", tokens.refresh, options);
 }
 function clearSessionCookies(res: any) {
   res.clearCookie("access_token", { path: "/" });
@@ -654,6 +656,22 @@ app.post("/api/auth/logout", (req: any, res) => {
 app.get("/api/auth/me", asyncHandler(async (req: any, res) => {
   const user = await resolveUser(req, res);
   res.json(user ? { loggedIn: true, user: publicIdentity(user) } : { loggedIn: false });
+}));
+app.post('/api/auth/presence', asyncHandler(async (req: any, res) => {
+  const { tabId, closing } = req.body || {};
+  if (typeof tabId !== 'string' || !/^[a-f0-9-]{36}$/i.test(tabId) ||
+      (closing !== undefined && typeof closing !== 'boolean')) return res.status(400).end();
+  if (closing) {
+    // No cookie changes on a close beacon: a late response must not erase the
+    // cookies of a newly loaded document or another open tab.
+    sessions.presence(req.cookies?.access_token, req.cookies?.refresh_token, tabId, true);
+    return res.status(204).end();
+  }
+  const user = await resolveUser(req, res);
+  if (!user || !sessions.presence(req.cookies?.access_token, req.cookies?.refresh_token, tabId)) {
+    return res.status(401).end();
+  }
+  res.status(204).end();
 }));
 
 // 2. Fetch Public Content & Teaser Data
@@ -3732,45 +3750,7 @@ async function start() {
     // Production mode
     const distPath = path.join(process.cwd(), "dist");
 
-    // /assets/*: gzip + cache imutável (nomes hasheados). Sempre antes do
-    // express.static para servir versões comprimidas e evitar revalidação.
-    const ASSET_MIME: Record<string, string> = {
-      js: "application/javascript; charset=UTF-8",
-      css: "text/css; charset=UTF-8",
-      svg: "image/svg+xml",
-      json: "application/json; charset=UTF-8"
-    };
-    const assetGzipCache = new Map<string, { gz: Buffer; raw: Buffer }>();
-    app.use("/assets", (req, res, next) => {
-      let pathname = req.path || "";
-      try {
-        pathname = decodeURIComponent(pathname);
-      } catch {
-        return next();
-      }
-      const ext = path.extname(pathname).slice(1).toLowerCase();
-      const isCompressible = ASSET_MIME[ext] && /gzip/.test((req.headers["accept-encoding"] || "").toLowerCase());
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      if (!isCompressible) return next();
-
-      const file = path.join(distPath, "assets", path.basename(pathname));
-      if (!fs.existsSync(file)) return next();
-      let entry = assetGzipCache.get(pathname);
-      if (!entry) {
-        try {
-          const raw = fs.readFileSync(file);
-          entry = { gz: gzipSync(raw), raw };
-          assetGzipCache.set(pathname, entry);
-        } catch {
-          return next();
-        }
-      }
-      res.setHeader("Content-Type", ASSET_MIME[ext]);
-      res.setHeader("Content-Encoding", "gzip");
-      res.setHeader("Vary", "Accept-Encoding");
-      res.setHeader("Content-Length", String(entry.gz.length));
-      return res.end(entry.gz);
-    });
+    app.use('/assets', compressedAssets(path.join(distPath, 'assets')));
 
     // Guarda: nunca servir arquivos sensíveis que estejam dentro de dist/
     // (server.cjs, sourcemaps, docs, envs, sql, logs, db.json...)

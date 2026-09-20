@@ -13,6 +13,8 @@ interface Session {
   createdAt: number;
   expiresAt: number;
   refreshHash: string;
+  presenceUntil: number;
+  tabs: Map<string, number>;
 }
 type Tokens = { access: string; refresh: string; identity: Identity };
 export class DuplicateDISessionError extends Error {
@@ -21,6 +23,8 @@ export class DuplicateDISessionError extends Error {
 const ACCESS_SECONDS = 15 * 60;
 const REFRESH_MS = 7 * 86400000;
 const MAX_MS = 30 * 86400000;
+export const PRESENCE_TIMEOUT_MS = 3 * 60_000;
+export const CLOSE_GRACE_MS = 15_000;
 const hash = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
 // Session state is never trusted from a JWT alone and never written in plaintext.
@@ -34,9 +38,37 @@ export class SessionService {
 
   private prune() {
     const now = Date.now();
-    for (const [id, s] of this.sessions) if (s.expiresAt <= now || s.createdAt + MAX_MS <= now) this.remove(id);
+    for (const [id, s] of this.sessions) if (this.expired(s, now)) this.remove(id);
     for (const [key, s] of this.used) if (s.expiresAt <= now) this.used.delete(key);
     while (this.used.size > 50000) this.used.delete(this.used.keys().next().value!);
+  }
+  private expired(session: Session, now = Date.now()): boolean {
+    return session.expiresAt <= now || session.createdAt + MAX_MS <= now || session.presenceUntil <= now;
+  }
+  private fromTokens(access: unknown, refresh: unknown): Session | undefined {
+    const id = this.verify(access, true);
+    if (id && this.sessions.has(id)) return this.sessions.get(id);
+    if (typeof refresh !== 'string' || refresh.length > 128) return undefined;
+    const refreshId = this.refreshIndex.get(hash(refresh));
+    return refreshId ? this.sessions.get(refreshId) : undefined;
+  }
+  presence(access: unknown, refresh: unknown, tab: string, closing = false): boolean {
+    const session = this.fromTokens(access, refresh);
+    if (!session) return false;
+    if (this.expired(session)) { this.remove(session.id); return false; }
+    const now = Date.now();
+    for (const [id, until] of session.tabs) if (until <= now) session.tabs.delete(id);
+    if (closing) {
+      // Ignore duplicate/late close notifications for documents already gone.
+      if (!session.tabs.delete(tab)) return true;
+      session.presenceUntil = session.tabs.size
+        ? Math.max(...session.tabs.values()) : now + CLOSE_GRACE_MS;
+    } else {
+      if (!session.tabs.has(tab) && session.tabs.size >= 32) return false;
+      session.tabs.set(tab, now + PRESENCE_TIMEOUT_MS);
+      session.presenceUntil = now + PRESENCE_TIMEOUT_MS;
+    }
+    return true;
   }
   private remove(id: string) {
     const session = this.sessions.get(id);
@@ -78,13 +110,14 @@ export class SessionService {
     if (this.sessions.size >= 10000) throw new Error("Limite de sessões atingido.");
     const refresh = crypto.randomBytes(32).toString("base64url");
     const session: Session = { id: crypto.randomBytes(24).toString("base64url"), identity,
-      createdAt: Date.now(), expiresAt: Date.now() + REFRESH_MS, refreshHash: hash(refresh) };
+      createdAt: Date.now(), expiresAt: Date.now() + REFRESH_MS, refreshHash: hash(refresh),
+      presenceUntil: Date.now() + PRESENCE_TIMEOUT_MS, tabs: new Map() };
     this.sessions.set(session.id, session);
     this.refreshIndex.set(session.refreshHash, session.id);
     return { access: this.access(session), refresh, identity };
   }
   private async current(session: Session): Promise<Identity | null> {
-    if (session.expiresAt <= Date.now() || session.createdAt + MAX_MS <= Date.now()) {
+    if (this.expired(session)) {
       this.remove(session.id); return null;
     }
     const current = await this.lookup(session.identity.code);
@@ -92,7 +125,7 @@ export class SessionService {
       this.revokeAccount(session.identity.code); return null;
     }
     // A concurrent password change/logout must not resurrect an in-flight session.
-    if (this.sessions.get(session.id) !== session) return null;
+    if (this.sessions.get(session.id) !== session || this.expired(session)) return null;
     session.identity = current;
     return current;
   }

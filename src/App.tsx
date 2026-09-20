@@ -3,6 +3,7 @@ import { useStore } from "./store";
 import Sidebar from "./components/Sidebar";
 import Footer from "./components/Footer";
 import { startPageNavigation } from "./navigation";
+import { startSessionPresence } from "./sessionPresence";
 
 // View components — code-split (lazy) to keep the initial bundle light.
 // Heavy views (AdminView, FenixSocialView e afins) só carregam quando acessados.
@@ -42,6 +43,14 @@ export default function App() {
     loggedIn,
     setActiveView
   } = useStore();
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    return startSessionPresence(() => {
+      // Clear private data as soon as the server confirms expiry.
+      void useStore.getState().logout();
+    });
+  }, [loggedIn]);
 
   // Modo manutenção: null = checando, "" = desligado, texto = mensagem do aviso.
   // Aplicado só ao site público (adminfenix.* e suporte.* continuam funcionando).

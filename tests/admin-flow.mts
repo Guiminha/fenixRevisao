@@ -44,7 +44,7 @@ db.getVimeoConfig = async () => ({ accessToken:'synthetic' });
 db.getCursos = async () => [{ id:'course-1',titulo:'Curso real',secao:'cursos' },{ id:'training-1',titulo:'Treinamento real',secao:'treinamentos' }];
 db.getMaterialById = async (id: string) => id === 'missing' ? null : { id,titulo:'Material real',fileUrl:'/api/storage/stream/materiais/test.pdf' };
 const { app } = await import('../server.ts');
-app.use(express.static('.admin-preview'));
+app.use(express.static(process.env.FENIX_TEST_DIST || 'dist'));
 const server = app.listen(0,'127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
 const port = (server.address() as any).port;
 const base = `http://127.0.0.1:${port}`;
