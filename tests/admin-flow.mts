@@ -66,6 +66,9 @@ try {
   assert.equal((await api('/api/content/course-access/missing',diCookie,{})).status,404);
   assert.equal((await api('/api/content/download/missing',diCookie,{})).status,404);
   const download = await api('/api/content/download/material-1',diCookie,{}); assert.equal(download.status,200); await download.text();
+  assert.equal((await api('/api/content/download/missing','')).status,404);
+  const publicDownload = await api('/api/content/download/material-1',''); assert.equal(publicDownload.status,200); assert.equal(await publicDownload.text(),'test');
+  assert.equal((await api('/api/content/restricted','')).status,401);
   const adminLogin = await api('/api/auth/login','',{ email:admin.email,password:'Synthetic123!' },true); assert.equal(adminLogin.status,200); const adminCookie = cookies(adminLogin);
   assert.equal((await api('/api/content/course-access/course-1',adminCookie,{},true)).status,204);
   assert.equal((await api('/api/admin/metrics',diCookie,undefined,true)).status,403);
@@ -80,7 +83,7 @@ try {
   assert.equal(health.services.length,4); assert.equal(health.services.find((s:any) => s.name==='Vimeo').online,false);
   let report: any;
   for (let i=0;i<10;i++) { report = await (await api('/api/admin/metrics',adminCookie,undefined,true)).json(); if (report.totals.error) break; await new Promise(r=>setTimeout(r,30)); }
-  assert.equal(report.totals.login,1); assert.equal(report.totals.course,1); assert.equal(report.totals.training,1); assert.equal(report.totals.download,1);
+  assert.equal(report.totals.login,1,JSON.stringify(report)); assert.equal(report.totals.course,1); assert.equal(report.totals.training,1); assert.equal(report.totals.download,1);
   assert.ok(report.errors.some((e:any)=>e.detail.source==='Vimeo'));
   failMetrics=true;
   assert.equal((await api('/api/content/course-access/course-1',diCookie,{})).status,204);

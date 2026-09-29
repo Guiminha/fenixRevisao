@@ -4,7 +4,6 @@ import { keyFromMediaUrl } from "./security.js";
 export type MediaPolicy = "public" | "member" | "moderator" | "blocked";
 export function materialPolicy(key: string, materials: any[]): MediaPolicy | null {
   const files = materials.filter(m => keyFromMediaUrl(m.file_url ?? m.fileUrl) === key);
-  if (files.some(m => !(m.is_public ?? m.isPublic))) return "member";
   if (files.length || materials.some(m => keyFromMediaUrl(m.thumbnail) === key)) return "public";
   return null;
 }
@@ -35,6 +34,7 @@ async function readRows(table: string, columns: string, filter?: [string, string
 }
 export async function mediaPolicy(key: string): Promise<MediaPolicy> {
   if (["backups-site/", "backups-banco/", "backup-suporte/", "suporte-anexos/"].some(p => key.startsWith(p))) return "blocked";
+  if (key.startsWith("cursos/videos/")) return "member";
   if (key.startsWith("fenix_social/")) {
     const posts = await rows("fenix_posts", "id,media_url,media_urls", ["status", "aprovado"]);
     return posts.some(p => [p.media_url, ...(p.media_urls || [])].some(url => keyFromMediaUrl(url) === key)) ? "public" : "moderator";
@@ -46,7 +46,8 @@ export async function mediaPolicy(key: string): Promise<MediaPolicy> {
   const materials = await rows("materiais", "id,file_url,thumbnail,is_public");
   const policy = materialPolicy(key, materials);
   if (policy) return policy;
-  if (key.startsWith("materiais/") || key.startsWith("cursos/videos/")) return "member";
+  // Uploads ainda não cadastrados continuam visíveis somente para quem tem sessão.
+  if (key.startsWith("materiais/")) return "member";
   const courseResult = await courseLookup!;
   if (courseResult.error) throw courseResult.error;
   const courses = courseResult.data;

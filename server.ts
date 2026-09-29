@@ -9,6 +9,7 @@ import multer from "multer";
 import helmet from "helmet";
 import "dotenv/config";
 import { recordMetric, metricsReport, reportSystemError } from './src/server/metricsService.js';
+import { DiagnosedError, describeFailure } from './src/server/errorDiagnostics.js';
 import { integrationStatus } from './src/server/integrationHealth.js';
 import { courseCoverPath, firstVimeoVideo, currentVimeoCover } from './src/server/vimeoCovers.js';
 import { previewWidth, resizePreview } from './src/server/imagePreview.js';
@@ -37,6 +38,7 @@ import {
 } from "./src/server/vimeoClient.js";
 import {
 globalApiRateLimiter,
+createRateLimiter,
 loginRateLimiter,
 ouvidoriaRateLimiter,
 uploadRateLimiter,
@@ -55,9 +57,17 @@ import { mediaPolicy } from "./src/server/mediaPolicy.js";
 import { SessionService, DuplicateDISessionError, type Identity } from "./src/server/sessionService.js";
 
 export const app = express();
+function reportApiFailure(req: any, status: number, stage: string, error: unknown) {
+  const failure = describeFailure(error);
+  const origin = failure.stage || stage;
+  const route = typeof req.route?.path === 'string' ? `${req.method} ${req.route.path}` : `${req.method} API`;
+  reportSystemError('API', `HTTP_${status}`, `Falha em ${origin}.`, route, { stage: origin, diagnostic: failure.diagnostic });
+  console.error('[API Diagnostic]', route, `HTTP_${status}`, origin, failure.diagnostic);
+  req.diagnosticReported = true;
+}
 app.use((req, res, next) => {
   res.on('finish', () => {
-    if (res.statusCode >= 500 && req.path.startsWith('/api/')) {
+    if (res.statusCode >= 500 && req.path.startsWith('/api/') && !(req as any).diagnosticReported) {
       reportSystemError('API', `HTTP_${res.statusCode}`, 'A solicitação falhou no servidor.', typeof req.route?.path === 'string' ? `${req.method} ${req.route.path}` : 'API');
     }
   });
@@ -65,8 +75,25 @@ app.use((req, res, next) => {
 });
 // Arquivos arquivados nunca devem ser disponibilizados pelo site, inclusive em desenvolvimento.
 app.use("/Lixo", (_req, res) => { res.status(404).end(); });
+// Documento de instruções do desenvolvimento: nunca é conteúdo público.
+app.use((req, res, next) => {
+  let pathname: string;
+  try { pathname = decodeURIComponent(req.path); }
+  catch { return res.status(404).end(); }
+  if (/(^|\/)estado_plataforma(?:_fenix)?\.md(?:\/|$)/i.test(pathname)
+      || /^\/api\/download-status-md\/?$/i.test(pathname)) {
+    return res.status(404).end();
+  }
+  next();
+});
 const uploadConcurrency = concurrencyLimit(2, 8);
 const mediaConcurrency = concurrencyLimit(8, 64);
+const materialDownloadConcurrency = concurrencyLimit(3, 24);
+const materialDownloadRateLimiter = createRateLimiter({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  message: "Muitos downloads em pouco tempo. Aguarde alguns minutos."
+});
 const PORT = Number(process.env.PORT) || 3000;
 
 // ---------------- Compressão (gzip) + cache de resposta ----------------
@@ -304,15 +331,27 @@ async function lookupIdentity(code: string): Promise<Identity | null> {
   }
   if (!/^[0-9a-f-]{36}$/i.test(code)) return null;
   const trusted = getSupabaseTrustedClient();
-  if (!trusted) throw new Error("Autenticação indisponível.");
-  const { data, error } = await trusted.auth.admin.getUserById(code);
-  if (error) { if (error.status === 404) return null; throw error; }
+  if (!trusted) throw new DiagnosedError('Supabase Auth / cliente indisponível', new Error('Cliente indisponível'));
+  let accountResult;
+  try {
+    accountResult = await trusted.auth.admin.getUserById(code);
+  } catch (error) {
+    throw new DiagnosedError('Supabase Auth / consulta do usuário administrativo', error);
+  }
+  const { data, error } = accountResult;
+  if (error) { if (error.status === 404) return null; throw new DiagnosedError('Supabase Auth / consulta do usuário administrativo', error); }
   const account = data?.user;
   if (!account || ((account as any).banned_until && Date.parse((account as any).banned_until) > Date.now())) return null;
   const version = account.updated_at || account.created_at;
   if (account.app_metadata?.role === "admin") return { code, role: "admin", name: "Administrador Fênix", version };
-  const { data: cfg, error: cfgError } = await trusted.from("config").select("value").eq("key", "supportUsers").maybeSingle();
-  if (cfgError) throw cfgError;
+  let configResult;
+  try {
+    configResult = await trusted.from("config").select("value").eq("key", "supportUsers").maybeSingle();
+  } catch (error) {
+    throw new DiagnosedError('Supabase / leitura da configuração de suporte', error);
+  }
+  const { data: cfg, error: cfgError } = configResult;
+  if (cfgError) throw new DiagnosedError('Supabase / leitura da configuração de suporte', cfgError);
   const staff = Array.isArray(cfg?.value) ? cfg.value.find((u: any) => u.email?.toLowerCase() === account.email?.toLowerCase()) : null;
   if (!staff?.ativo) return null;
   return { code, role: "support", name: staff.nome || "Suporte Fênix", version: `${version}:${staff.sessionVersion || "legacy"}`,
@@ -367,32 +406,7 @@ app.use((req: any, res, next) => {
   next();
 });
 
-// Serve uploaded files statically
-// Serve apenas assets estáticos do app (public/uploads: fallbacks de imagem
-// referenciados em código). Uploads dinâmicos ficam 100% no Supabase Storage.
-// Materiais privados nunca são servidos anonimamente por aqui.
-const privateUploadsCache = new Map<string, { time: number; isPrivate: boolean }>();
-app.use("/uploads", asyncHandler(async (req: any, res, next) => {
-  const name = (req.path || "").replace(/^\/+/, "");
-  if (!name) return next();
-  const cached = privateUploadsCache.get(name);
-  let isPrivate = false;
-  if (cached && Date.now() - cached.time < 15_000) {
-    isPrivate = cached.isPrivate;
-  } else {
-    try {
-      const mats = (await dbService.getData(undefined, true)).materiais;
-      isPrivate = mats.some((m: any) => !m.isPublic && m.fileUrl === `/uploads/${name}`);
-    } catch {
-      return res.status(503).end();
-    }
-    privateUploadsCache.set(name, { time: Date.now(), isPrivate });
-    if (privateUploadsCache.size > 500) privateUploadsCache.clear();
-  }
-  if (!isPrivate) return next();
-  if (await isMaterialMediaAllowed(req, res)) return next();
-  return res.status(404).end();
-}));
+// Assets estáticos legados. Uploads dinâmicos ficam no Supabase Storage.
 app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
 
 // Apply Global Rate Limiter to all API endpoints
@@ -423,7 +437,7 @@ app.use("/api", (req, res, next) => {
 // No host PRINCIPAL: /api/admin/* => 403 e /adminfenix => 404 (área invisível ao site).
 // No host DO ADMIN (subdomínio): somente as rotas de API usadas pelo painel
 // (/api/auth*, /api/admin/*, /api/content/*, /api/fenix-social/*, /api/vimeo/*,
-// /api/storage/*, /api/download-status-md) existem; qualquer outro /api/* => 403.
+// /api/storage/*) existem; qualquer outro /api/* => 403.
 // A raiz "/" serve a SPA (o frontend detecta o host e abre o painel de login automaticamente).
 const ADMIN_HOST_PREFIX = (process.env.ADMIN_HOST_PREFIX || "adminfenix.").toLowerCase();
 const ADMIN_HOSTS = (process.env.ADMIN_HOSTS || "")
@@ -483,8 +497,7 @@ function isSupportHost(req: any): boolean {
 const ADMIN_API_WHITELIST = [
   "/api/auth/login",
   "/api/auth/logout",
-  "/api/auth/me",
-  "/api/download-status-md"
+  "/api/auth/me"
 ];
 
 function isAdminApiPath(pathname: string): boolean {
@@ -584,7 +597,9 @@ app.use((req: any, res: any, next: any) => {
 
 // Every protected request revalidates the identity and current permissions.
 async function authenticateUser(req: any, res: any, next: () => void) {
+  req.failureStage = 'validação da sessão e das permissões';
   const user = await resolveUser(req, res);
+  delete req.failureStage;
   if (!user) return res.status(401).json({ error: "Sessão expirada. Faça login novamente." });
   if (user.mustChangePassword && !["/api/auth/me", "/api/auth/logout", "/api/support/change-password"].includes(req.path)) {
     return res.status(403).json({ error: "Defina sua própria senha para continuar.", mustChangePassword: true });
@@ -609,17 +624,6 @@ async function requireSupportOrAdmin(req: any, res: any, next: () => void) {
 }
 
 // ---------------- API ENDPOINTS ----------------
-
-// Download status MD endpoint
-app.get("/api/download-status-md", (req, res) => {
-  const filePath = path.join(process.cwd(), "public/estado_plataforma.md");
-  if (fs.existsSync(filePath)) {
-    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-    res.setHeader("Content-Disposition", 'attachment; filename="estado_plataforma_fenix.md"');
-    return res.sendFile(filePath);
-  }
-  return res.status(404).json({ error: "Arquivo de estado não encontrado." });
-});
 
 // 1. Auth Endpoint
 app.post("/api/auth/login", loginRateLimiter, asyncHandler(async (req, res) => {
@@ -715,8 +719,9 @@ app.get("/api/content/public", asyncHandler(async (req, res) => {
         tipo: m.tipo,
         categoria: m.categoria,
         thumbnail: m.thumbnail,
+        fileUrl: m.fileUrl,
         downloads: m.downloads,
-        isPublic: m.isPublic,
+        isPublic: true,
         createdAt: m.createdAt
       })),
       banners: dbData.banners || [],
@@ -734,7 +739,7 @@ app.get("/api/content/public", asyncHandler(async (req, res) => {
     res.type("application/json").send(data);
   } catch (err: any) {
     console.error("Erro ao carregar conteúdo público:", err);
-    res.status(500).json({ error: "Falha ao processar requisição." });
+    res.status(503).json({ error: "Conteúdo temporariamente indisponível." });
   }
 }));
 
@@ -794,19 +799,20 @@ app.get('/api/content/course-cover/:id', asyncHandler(async (req, res) => {
   }
 }));
 
-// Entrega o arquivo real do material (Supabase Storage) apenas para sessão
-// válida, enviada pelo cliente em cookie httpOnly. MIME determinada no servidor; o
-// download é sempre attachment.
-app.post("/api/content/download/:id", asyncHandler(authenticateUser), asyncHandler(async (req: any, res) => {
+// Entrega pública apenas de arquivos vinculados a um material cadastrado.
+// Cursos, anexos do suporte e backups não passam por esta rota.
+const serveMaterialDownload = asyncHandler(async (req: any, res) => {
   try {
     const { id } = req.params;
-    const material = await dbService.getMaterialById(id, req.user?.supabaseToken);
+    const material = await dbService.getMaterialById(id);
     if (!material || !material.fileUrl) {
       return res.status(404).json({ error: "Material não encontrado." });
     }
+    // A identificação é opcional: falhas de autenticação não impedem o visitante.
+    const viewer = await resolveUser(req, res).catch(() => null);
     res.once('finish', () => {
-      if (res.statusCode === 200 && req.user?.role === 'user') {
-        void recordMetric({ kind: 'download', actor: req.user.code, entity_id: id, detail: { title: material.titulo } });
+      if (res.statusCode === 200 && viewer?.role === 'user') {
+        void recordMetric({ kind: 'download', actor: viewer.code, entity_id: id, detail: { title: material.titulo } });
       }
     });
 
@@ -815,8 +821,8 @@ app.post("/api/content/download/:id", asyncHandler(authenticateUser), asyncHandl
 
     try {
       if (fileUrl.startsWith("/api/storage/") && (fileUrl.includes("/preview/") || fileUrl.includes("/stream/"))) {
-        const objectKey = decodeURIComponent(fileUrl.replace(/^\/api\/storage\/(preview|stream)\//, ""));
-        if (!objectKey) {
+        const objectKey = keyFromMediaUrl(fileUrl);
+        if (!objectKey || isBackupFamilyKey(objectKey) || objectKey.startsWith("cursos/videos/") || objectKey.startsWith("fenix_social/")) {
           return res.status(404).json({ error: "Arquivo não encontrado." });
         }
         const client = getActiveStorageClient();
@@ -839,7 +845,9 @@ app.post("/api/content/download/:id", asyncHandler(authenticateUser), asyncHandl
   } catch (err: any) {
     res.status(500).json({ error: "Falha ao processar download." });
   }
-}));
+});
+app.get("/api/content/download/:id", materialDownloadRateLimiter, materialDownloadConcurrency, serveMaterialDownload);
+app.post("/api/content/download/:id", materialDownloadRateLimiter, materialDownloadConcurrency, serveMaterialDownload);
 
 // 4.1 Admin Material Categories Endpoint
 app.post("/api/admin/categorias-materiais", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
@@ -1106,15 +1114,14 @@ app.delete("/api/admin/cursos/:id", asyncHandler(requireAdmin), asyncHandler(asy
 // fileUrl de materiais é servido como link de download ‐ aceita SOMENTE caminhos
 // do próprio site (Supabase Storage). URLs externas (http/data:/javascript:) são rejeitadas.
 function isSafeMaterialFileUrl(value: string): boolean {
-  return (
-    typeof value === "string" &&
-    value.startsWith("/api/storage/")
-  );
+  if (typeof value !== "string" || !/^\/api\/storage\/(?:preview|stream)\//.test(value)) return false;
+  const key = keyFromMediaUrl(value);
+  return !!key && !isBackupFamilyKey(key) && !key.startsWith("cursos/videos/") && !key.startsWith("fenix_social/");
 }
 
 app.post("/api/admin/materiais", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
-    const { id, titulo, tipo, categoria, thumbnail, fileUrl, isPublic } = req.body;
+    const { id, titulo, tipo, categoria, thumbnail, fileUrl } = req.body;
     if (!titulo || !tipo || !categoria || !thumbnail || !fileUrl) {
       return res.status(400).json({ error: "Campos obrigatórios ausentes." });
     }
@@ -1132,7 +1139,7 @@ app.post("/api/admin/materiais", asyncHandler(requireAdmin), asyncHandler(async 
       thumbnail: safeLinkTarget(thumbnail),
       fileUrl,
       downloads: existing ? existing.downloads : 0,
-      isPublic: !!isPublic,
+      isPublic: true,
       createdAt: new Date().toISOString()
     };
 
@@ -1776,6 +1783,7 @@ app.get("/api/fenix-social/admin/all-posts", asyncHandler(requireAdmin), asyncHa
     const posts = await dbService.getAllFenixPosts(req.token);
     res.json({ posts });
   } catch (err) {
+    reportApiFailure(req, 500, 'Fênix Social / consulta das publicações administrativas', err);
     res.status(500).json({ error: "Erro ao carregar todas as publicações para administração." });
   }
 }));
@@ -1858,6 +1866,7 @@ app.get("/api/fenix-social/admin/moderator-links", asyncHandler(requireAdmin), a
     const links = await dbService.getModeratorLinks(req.user?.supabaseToken);
     res.json({ links });
   } catch (err) {
+    reportApiFailure(req, 500, 'Fênix Social / consulta dos links de moderadores', err);
     res.status(500).json({ error: "Erro ao listar links de moderadores." });
   }
 }));
@@ -2178,6 +2187,7 @@ app.get("/api/admin/metrics", asyncHandler(requireAdmin), asyncHandler(async (re
     res.setHeader('Cache-Control', 'no-store');
     res.json(await metricsReport(days));
   } catch (error: any) {
+    reportApiFailure(req, 503, 'Supabase / relatório de métricas', error);
     res.status(503).json({ error: error.message });
   }
 }));
@@ -2196,6 +2206,7 @@ app.get("/api/admin/dis", asyncHandler(requireAdmin), asyncHandler(async (req: a
     const list = await dbService.getDICodes(req.user?.supabaseToken);
     res.json({ success: true, diCodes: list });
   } catch (err: any) {
+    reportApiFailure(req, 500, 'D.I.s / consulta dos códigos', err);
     res.status(500).json({ error: "Erro ao buscar códigos D.I." });
   }
 }));
@@ -3280,12 +3291,8 @@ function isBackupFamilyKey(objectKey: string): boolean {
 }
 
 // Serve Images / Documents directly from Supabase Storage
-// Mídias de material (pasta materiais/*) são protegidas: só servidas com sessão
-// válida (cookie httpOnly OU Authorization Bearer ‐ o mesmo fallback do
-// authenticateUser, para <img>/<video>/<a href> seguirem funcionando). Anônimos
-// recebem o MESMO 404 de arquivo inexistente (não revela existência do arquivo).
-// Requests do próprio servidor (loopback ‐ ex.: ffmpeg remuxando HLS de material
-// via http://127.0.0.1:PORT) passam sem sessão.
+// Somente mídias vinculadas a materiais cadastrados são públicas. As demais
+// famílias seguem as permissões decididas em mediaPolicy.
 function mediaAbortSignal(res: import("express").Response, timeout = 120000): AbortSignal {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -3300,10 +3307,6 @@ function pipeMedia(stream: import("node:stream").Readable, res: import("express"
   stream.pipe(res);
 }
 const internalMediaTokens = new Map<string, { key: string; expiresAt: number }>();
-async function isMaterialMediaAllowed(req: any, res: any): Promise<boolean> {
-  const user = await resolveUser(req, res);
-  return !!user && !user.mustChangePassword;
-}
 async function authorizeMedia(req: any, res: any, key: string): Promise<boolean> {
   const internal = typeof req.headers["x-internal-ffmpeg"] === "string" && internalMediaTokens.get(req.headers["x-internal-ffmpeg"]);
   const socket = req.socket?.remoteAddress;
@@ -3428,7 +3431,7 @@ app.get("/api/storage/preview/*", mediaConcurrency, asyncHandler(async (req, res
 
     const client = getActiveStorageClient();
 
-    const stat = await withTimeout(client.statObject(STORAGE_BUCKET, objectKey), 1500, "Timeout no Storage");
+    const stat = await withTimeout(client.statObject(STORAGE_BUCKET, objectKey), 8500, "Timeout no Storage");
     const dispositionHeaders = () => {
       if (isExplicitDownload) {
         const safeName = getSafeFilename();
@@ -3439,7 +3442,7 @@ app.get("/api/storage/preview/*", mediaConcurrency, asyncHandler(async (req, res
       }
     };
     if (stat.size <= STORAGE_PREVIEW_CACHE_MAX_FILE) {
-      const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res, 4000));
+      const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res, 12000));
       const chunks: Buffer[] = [];
       let bytes = 0;
       for await (const chunk of stream) {
@@ -3464,7 +3467,10 @@ app.get("/api/storage/preview/*", mediaConcurrency, asyncHandler(async (req, res
       pipeMedia(stream, res);
     }
   } catch (err: any) {
-    res.status(404).json({ error: "Arquivo não encontrado no Storage." });
+    res.setHeader("Cache-Control", "private, no-store");
+    if (err?.status === 404) return res.status(404).json({ error: "Arquivo não encontrado no Storage." });
+    reportApiFailure(req, 503, "carregamento de imagem no Supabase Storage", err);
+    res.status(503).json({ error: "Imagem temporariamente indisponível. Tente novamente." });
   }
 }));
 
@@ -3733,7 +3739,7 @@ app.use((err: any, req: any, res: any, next: any) => {
   if (err && (err.name === "MulterError" || err.code === "LIMIT_FILE_SIZE" || /malformed|unexpected field|part/i.test(msg))) {
     return res.status(400).json({ error: "Upload inválido ou corrompido." });
   }
-  console.error("[API Error]", req.method, req.path, err);
+  reportApiFailure(req, 500, req.failureStage || 'processamento da API', err);
   return res.status(500).json({ error: "Erro interno do servidor." });
 });
 

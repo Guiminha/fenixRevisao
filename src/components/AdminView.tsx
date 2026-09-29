@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { AdminOverview } from './AdminOverview';
 import { ExternalServers } from './ExternalServers';
 import { UploadProgressBar, UploadProgressState } from "./UploadProgressBar";
@@ -157,7 +157,9 @@ export default function AdminView() {
   const [nfFiltroSit, setNfFiltroSit] = useState("todos");
   const [nfCarregando, setNfCarregando] = useState(false);
   const [nfSyncing, setNfSyncing] = useState(false);
-  const [nfCarregandoStatus, setNfCarregandoStatus] = useState(false);
+  const nfConsultaEmAndamento = useRef(false);
+  const [nfErroConsulta, setNfErroConsulta] = useState<string | null>(null);
+  const [nfUltimaConsulta, setNfUltimaConsulta] = useState<Date | null>(null);
   const [nfLogs, setNfLogs] = useState<any[]>([]);
   // Quando "Limpar Logs" é clicado, guardamos um "marco": logs que existiam antes
   // da limpeza. Assim o auto-refresh/recarregar só exibe logs NOVOS (que vieram
@@ -166,13 +168,13 @@ export default function AdminView() {
 
   // Filtra logs recebidos do backend: se houve limpeza nesta sessão, mostra só os
   // que NÃO estavam no snapshot da limpeza; caso contrário, mostra tudo.
-  const filtrarLogsNovos = (incoming: any[]) => {
+  const filtrarLogsNovos = useCallback((incoming: any[]) => {
     const ancora = nfLogsAncoradosRef.current;
     if (!ancora || !Array.isArray(incoming)) return incoming;
     return incoming.filter(
       (l) => !ancora.some((a) => a && (l?.id ? a.id === l.id : a.ts === l?.ts && a.msg === l?.msg))
     );
-  };
+  }, []);
 
   const NfSitBadge = ({ situacao }: { situacao: string }) => {
     const mapa: Record<string, { l: string; c: string }> = {
@@ -191,7 +193,7 @@ export default function AdminView() {
     : nfEstado?.status === "ok"
     ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/10 border border-white/15 text-[#94a3b8] text-[10px] font-bold uppercase tracking-wider"><Database className="w-3.5 h-3.5" /> Sem dados</span>
     : nfEstado?.status === "em_andamento"
-    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider"><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Em andamento</span>
+    ? <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider"><RefreshCw className="w-3.5 h-3.5 nf-sync-spin" /> Em andamento</span>
     : <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-500/15 border border-red-500/30 text-red-400 text-[10px] font-bold uppercase tracking-wider"><XCircle className="w-3.5 h-3.5" /> Erro</span>;
 
   const nfUltimaAtualizacao = nfEstado?.ultimaSincronizacao
@@ -211,17 +213,25 @@ export default function AdminView() {
     return acc;
   }, {});
 
-  const carregarNfStatus = async () => {
-    if (nfCarregandoStatus) return;
-    setNfCarregandoStatus(true);
-    const res = await fetchNfStatus();
-    if (res.success) {
-      setNfEstado(res.estado);
-      setNfMetricas(res.metricas);
-      setNfLogs(filtrarLogsNovos(res.logs || []));
+  const carregarNfStatus = useCallback(async (signal?: AbortSignal) => {
+    if (nfConsultaEmAndamento.current || signal?.aborted) return;
+    nfConsultaEmAndamento.current = true;
+    try {
+      const res = await fetchNfStatus(signal);
+      if (signal?.aborted) return;
+      if (res.success) {
+        setNfEstado(res.estado);
+        setNfMetricas(res.metricas);
+        setNfLogs(filtrarLogsNovos(res.logs || []));
+        setNfUltimaConsulta(new Date());
+        setNfErroConsulta(null);
+      } else {
+        setNfErroConsulta(res.error || "Não foi possível consultar o status.");
+      }
+    } finally {
+      nfConsultaEmAndamento.current = false;
     }
-    setNfCarregandoStatus(false);
-  };
+  }, [fetchNfStatus, filtrarLogsNovos]);
 
   const carregarNfDados = async () => {
     setNfCarregando(true);
@@ -289,36 +299,36 @@ export default function AdminView() {
 
   useEffect(() => {
     if (activeTab === "cadastrar-di") {
-      carregarNfStatus();
       fetchSituacoesPermitidas().then((r) => { if (r.success && r.situacoes) setNfSituacoes(r.situacoes); });
     }
   }, [activeTab]);
 
-  // Auto-atualização do status/logs enquanto houver sincronização em andamento
+  // Continua consultando mesmo após falhas ou sincronizações iniciadas em outra aba.
   useEffect(() => {
     if (activeTab !== "cadastrar-di") return;
-    if (nfEstado?.status !== "em_andamento") return;
-    const id = setInterval(async () => {
-      const res = await fetchNfStatus();
-      if (res.success) {
-        setNfEstado(res.estado);
-        setNfMetricas(res.metricas);
-        setNfLogs(filtrarLogsNovos(res.logs || []));
-        // Quando termina, recarrega a lista de D.I.s
-        if (res.estado?.status !== "em_andamento") {
-          carregarNfDados();
-        }
-      }
-    }, 5000);
-    return () => clearInterval(id);
-  }, [activeTab, nfEstado?.status]);
+    const controller = new AbortController();
+    const atualizar = () => { void carregarNfStatus(controller.signal); };
+    const aoRetornar = () => { if (!document.hidden) atualizar(); };
+    atualizar();
+    const id = setInterval(atualizar, 5000);
+    window.addEventListener('focus', atualizar);
+    window.addEventListener('online', atualizar);
+    document.addEventListener('visibilitychange', aoRetornar);
+    return () => {
+      clearInterval(id);
+      controller.abort();
+      window.removeEventListener('focus', atualizar);
+      window.removeEventListener('online', atualizar);
+      document.removeEventListener('visibilitychange', aoRetornar);
+    };
+  }, [activeTab, carregarNfStatus]);
 
   useEffect(() => {
     if (activeTab === "cadastrar-di") {
       const t = setTimeout(() => carregarNfDados(), 300);
       return () => clearTimeout(t);
     }
-  }, [activeTab, nfPagina, nfBusca, nfFiltroSit]);
+  }, [activeTab, nfPagina, nfBusca, nfFiltroSit, nfEstado?.ultimaSincronizacao]);
 
 
   // --- STATUS DAS INTEGRAÇÕES (Supabase Storage + Vimeo) ---
@@ -652,10 +662,10 @@ export default function AdminView() {
   const [bannerImagem, setBannerImagem] = useState("");
   const [bannerBotoesAtivos, setBannerBotoesAtivos] = useState(true);
   const [bannerBtn1Texto, setBannerBtn1Texto] = useState("");
-  const [bannerBtn1Tipo, setBannerBtn1Tipo] = useState<"pagina" | "curso" | "material" | "externo" | "nenhum">("nenhum");
+  const [bannerBtn1Tipo, setBannerBtn1Tipo] = useState<"pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum">("nenhum");
   const [bannerBtn1Destino, setBannerBtn1Destino] = useState("");
   const [bannerBtn2Texto, setBannerBtn2Texto] = useState("");
-  const [bannerBtn2Tipo, setBannerBtn2Tipo] = useState<"pagina" | "curso" | "material" | "externo" | "nenhum">("nenhum");
+  const [bannerBtn2Tipo, setBannerBtn2Tipo] = useState<"pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum">("nenhum");
   const [bannerBtn2Destino, setBannerBtn2Destino] = useState("");
   const [bannerOrdem, setBannerOrdem] = useState(1);
 
@@ -1575,7 +1585,6 @@ export default function AdminView() {
     }
   };
   const [matFileUrl, setMatFileUrl] = useState("");
-  const [matIsPublic, setMatIsPublic] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
@@ -1619,7 +1628,6 @@ export default function AdminView() {
     setMatCategory(item.categoria);
     setMatThumbnail(item.thumbnail);
     setMatFileUrl(item.fileUrl);
-    setMatIsPublic(item.isPublic);
   };
 
   const handleSaveMaterial = async (e: React.FormEvent) => {
@@ -1645,7 +1653,7 @@ export default function AdminView() {
       categoria: matCategory,
       thumbnail: matThumbnail,
       fileUrl: matFileUrl,
-      isPublic: matIsPublic
+      isPublic: true
     };
 
     const result = await saveMaterial(payload);
@@ -1655,7 +1663,6 @@ export default function AdminView() {
       setMatTitulo("");
       setMatThumbnail("");
       setMatFileUrl("");
-      setMatIsPublic(false);
     } else {
       triggerNotification("error", result.error || "Erro ao salvar material.");
     }
@@ -1791,10 +1798,12 @@ export default function AdminView() {
                     <Activity className="w-4 h-4 text-[#d12a62]" />
                     Estado do Sistema
                   </h3>
-                  {nfStatusBadge}
+                  {nfErroConsulta ? <span className="text-xs text-amber-400">Status desatualizado</span> : nfStatusBadge}
                 </div>
                 <div className="space-y-2.5 text-xs">
                   <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Última atualização</span><strong className="text-white">{nfUltimaAtualizacao}</strong></div>
+                  <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Última consulta ao servidor</span><span>{nfUltimaConsulta ? nfUltimaConsulta.toLocaleTimeString('pt-BR') : 'Aguardando confirmação'}</span></div>
+                  {nfErroConsulta && <p role="alert" className="text-amber-300">{nfErroConsulta} Os dados exibidos são da última consulta. Tentaremos atualizar automaticamente.</p>}
                   {nfEstado?.erro && (
                     <div className="mt-2 p-2.5 rounded-xl bg-red-950/30 border border-red-500/25 text-red-400 text-[11px] leading-relaxed">
                       <AlertTriangle className="w-3.5 h-3.5 inline mr-1" />
@@ -1805,10 +1814,10 @@ export default function AdminView() {
                 <button
                   type="button"
                   onClick={handleNfSync}
-                  disabled={nfSyncing || nfEstado?.status === "em_andamento"}
+                  disabled={nfSyncing || nfEstado?.status === "em_andamento" || !!nfErroConsulta || !nfUltimaConsulta}
                   className="mt-5 w-full btn-gold-metallic py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  {nfSyncing || nfEstado?.status === "em_andamento" ? (<><RefreshCw className="w-4 h-4 animate-spin" /> Sincronizando...</>) : (<><RefreshCw className="w-4 h-4" /> SINCRONIZAR DADOS</>)}
+                  {nfErroConsulta ? 'Aguardando confirmação do status' : nfSyncing || nfEstado?.status === "em_andamento" ? (<><RefreshCw className="w-4 h-4 nf-sync-spin" /> Sincronizando...</>) : (<><RefreshCw className="w-4 h-4" /> SINCRONIZAR DADOS</>)}
                 </button>
 
                 {/* Card de Alterações da Última Atualização */}
@@ -1920,9 +1929,9 @@ export default function AdminView() {
                 <Activity className="w-4 h-4 text-[#d12a62]" />
                 Logs da Sincronização
               </h3>
-              {nfEstado?.status === "em_andamento" && (
+              {nfEstado?.status === "em_andamento" && !nfErroConsulta && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Ao vivo
+                  <RefreshCw className="w-3.5 h-3.5 nf-sync-spin" /> Ao vivo
                 </span>
               )}
               <button
@@ -2447,6 +2456,7 @@ export default function AdminView() {
                         <option value="pagina">Ir para uma Página do Site</option>
                         <option value="curso">Ir para um Curso do App</option>
                         <option value="material">Ir para um Material para Download</option>
+                        <option value="quero-fazer-parte">Abrir modal Quero fazer parte</option>
                         <option value="externo">Site Externo / URL Personalizada</option>
                       </select>
                     </div>
@@ -2547,6 +2557,7 @@ export default function AdminView() {
                         <option value="pagina">Ir para uma Página do Site</option>
                         <option value="curso">Ir para um Curso do App</option>
                         <option value="material">Ir para um Material para Download</option>
+                        <option value="quero-fazer-parte">Abrir modal Quero fazer parte</option>
                         <option value="externo">Site Externo / URL Personalizada</option>
                       </select>
                     </div>
@@ -3457,13 +3468,13 @@ export default function AdminView() {
                   ÁREA DE CADASTRO — MATERIAIS DE APOIO
                 </h3>
                 <p className="text-[11px] text-[#8a96a3] mt-1">
-                  Cadastre folders, manuais e vídeos do YouTube para download e visualização pelos D.I.s.
+                  Cadastre folders, manuais e vídeos para download e visualização por todos os visitantes.
                 </p>
               </div>
 
               <p className="text-[10px] text-blue-400 bg-blue-500/5 border border-blue-500/20 p-3 rounded-2xl leading-relaxed">
                 <FolderDown className="w-3.5 h-3.5 inline mr-1" />
-                Os arquivos configurados neste painel estarão instantaneamente <strong>disponíveis para download</strong> na aba Biblioteca dos usuários logados com suas chaves de acesso.
+                Os materiais cadastrados aqui ficam <strong>disponíveis para todos os visitantes</strong> na página Materiais de Apoio, sem necessidade de login.
               </p>
 
               <div className="space-y-2">
@@ -3721,8 +3732,8 @@ export default function AdminView() {
                   className="accent-[#d12a62] w-4 h-4 rounded"
                 />
                 <div className="text-[11px]">
-                  <p className="text-white font-semibold">Exige Login Autenticado</p>
-                  <p className="text-[#8a96a3] text-[9px]">Sempre ativo por padrão para segurança de IP.</p>
+                  <p className="text-white font-semibold">Acesso público</p>
+                  <p className="text-[#8a96a3] text-[9px]">Visualização e download disponíveis sem login.</p>
                 </div>
               </div>
 
@@ -3742,7 +3753,6 @@ export default function AdminView() {
                       setMatTitulo("");
                       setMatThumbnail("");
                       setMatFileUrl("");
-                      setMatIsPublic(false);
                     }}
                     className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded-2xl transition-all hover:scale-[1.02] active:scale-[0.98]"
                     title="Descartar edição"

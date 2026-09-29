@@ -107,10 +107,10 @@ export interface Banner {
   corDescricao?: string;
   botoesAtivos: boolean;
   btn1Texto?: string;
-  btn1Tipo?: "pagina" | "curso" | "material" | "externo" | "nenhum";
+  btn1Tipo?: "pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum";
   btn1Destino?: string;
   btn2Texto?: string;
-  btn2Tipo?: "pagina" | "curso" | "material" | "externo" | "nenhum";
+  btn2Tipo?: "pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum";
   btn2Destino?: string;
   ordem?: number;
   createdAt: string;
@@ -1291,12 +1291,15 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     const client = getSupabaseTrustedClient(userToken);
     if (isSupabase && client) {
       try {
-        const { data: row } = await client.from("materiais").select("*").eq("id", id).maybeSingle();
+        const { data: row, error } = await client.from("materiais").select("*").eq("id", id).maybeSingle();
+        if (error) throw error;
         return row ? mapMaterialFromDb(row) : null;
       } catch (err) {
         console.error("[Supabase] getMaterialById falhou:", err);
+        if (SUPABASE_ONLY) throw err;
       }
     }
+    if (SUPABASE_ONLY) throw new Error("Supabase indisponível (modo SUPABASE_ONLY).");
     const data = this.loadLocal();
     return data.materiais.find((m) => m.id === id) || null;
   }
@@ -2622,7 +2625,9 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
 
   public async getOuvidoriaConfig(userToken?: string): Promise<OuvidoriaConfig> {
     const isSupabase = await this.ensureInitialized();
-    const client = getSupabaseClient(userToken) || supabase;
+    // Configuração interna: consumidores são rotas protegidas ou tarefas do servidor.
+    // Não depender da leitura anônima desta chave no Supabase.
+    const client = getSupabaseTrustedClient(userToken);
     if (isSupabase && client) {
       try {
         const { data } = await client.from("config").select("value").eq("key", "ouvidoriaConfig").maybeSingle();

@@ -68,12 +68,16 @@ export default function PaginaBlocos({
   blocos,
   ctaModal = "queroFazerParte",
   preview = false,
-  coverSemTexto = false
+  coverSemTexto = false,
+  renderAfterBlock,
+  compactTop = false
 }: {
   blocos: PaginaBloco[];
   ctaModal?: "queroFazerParte" | "elite";
   preview?: boolean;
   coverSemTexto?: boolean;
+  renderAfterBlock?: (bloco: PaginaBloco) => React.ReactNode;
+  compactTop?: boolean;
 }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEliteModalOpen, setIsEliteModalOpen] = useState(false);
@@ -206,7 +210,7 @@ export default function PaginaBlocos({
 
       case "hero_header":
         return (
-          <section key={bloco.id} className="relative mx-auto max-w-4xl text-center px-4 sm:px-6 py-10 sm:py-12 space-y-4">
+          <section key={bloco.id} className={`relative mx-auto max-w-4xl text-center px-4 sm:px-6 space-y-4 ${compactTop && index === 0 ? "py-3 sm:py-4" : "py-10 sm:py-12"}`}>
             <FundoDecorativo cor={campos.cor || "rosa"} />
             <div className="relative z-10 flex flex-col items-center gap-4">
               {campos.icone && (
@@ -406,8 +410,13 @@ export default function PaginaBlocos({
         </div>
         <div className="relative z-10">
           {topoFullBleed && renderBloco(topo, 0, true)}
-          <div className={`max-w-5xl mx-auto space-y-12 sm:space-y-16 px-4 sm:px-6 xl:max-w-6xl 2xl:max-w-7xl min-[2200px]:max-w-[90rem]${topoFullBleed ? " mt-10" : " pt-6 sm:pt-10"}`}>
-            {resto.map((bloco, idx) => renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false))}
+          <div className={`max-w-5xl mx-auto space-y-12 sm:space-y-16 px-4 sm:px-6 xl:max-w-6xl 2xl:max-w-7xl min-[2200px]:max-w-[90rem]${topoFullBleed ? " mt-10" : compactTop ? " pt-0" : " pt-6 sm:pt-10"}`}>
+            {resto.map((bloco, idx) => (
+              <React.Fragment key={bloco.id}>
+                {renderBloco(bloco, topoFullBleed ? idx + 1 : idx, false)}
+                {renderAfterBlock?.(bloco)}
+              </React.Fragment>
+            ))}
           </div>
         </div>
       </div>

@@ -14,7 +14,7 @@ type Report = {
   situations: { situation: string; count: number }[];
   transitions: { previous: string; current: string; count: number }[];
   changes: { id: string; occurred_at: string; entity_id: string; detail: { name: string; previous?: string; current: string } }[];
-  errors: { id: string; occurred_at: string; detail: { source: string; code: string; message: string; route?: string } }[];
+  errors: { id: string; occurred_at: string; detail: { source: string; code: string; message: string; route?: string; stage?: string; diagnostic?: string } }[];
 };
 function exportCsv(name: string, rows: unknown[][]) {
   const cell = (value: unknown) => {
@@ -85,8 +85,8 @@ export function AdminOverview() {
       <Section title="Resumo do período"><p>{number(report.totals.login)} logins de {number(report.uniqueDIs)} D.I.s, {number(report.totals.download)} downloads, {number(report.totals.course)} aberturas de cursos e {number(report.totals.training)} de treinamentos. {number(report.totals.di_new)} novos cadastros e {number(report.totals.di_status)} mudanças de situação.</p><button className={button} onClick={() => exportCsv('resumo', [['Período (dias)',days],['Gerado em',date(report.generatedAt)],['D.I.s únicos',report.uniqueDIs],...Object.entries(report.totals)])}>Exportar resumo CSV</button></Section>
       <Section title="Erros do sistema">
         <p className="text-sm text-gray-400">Falhas da API, sincronização, verificações dos servidores e erros relatados por navegadores autenticados. Repetições iguais são agrupadas em intervalos de um minuto. Até 100 registros recentes do período; não é uma verificação contínua dos servidores.</p>
-        <button className={button} onClick={() => exportCsv('erros', [['Data','Origem','Código','Mensagem','Rota'], ...report.errors.map(row => [date(row.occurred_at),row.detail.source,row.detail.code,row.detail.message,row.detail.route])])}>Exportar erros exibidos CSV</button>
-        {report.errors.length ? <div className="space-y-3 max-h-96 overflow-auto">{report.errors.map(row => <article key={row.id} className="border border-red-400/20 bg-red-950/20 rounded-xl p-4"><p className="text-sm text-red-200">{row.detail.source} · {row.detail.code} · {date(row.occurred_at)}</p><p>{row.detail.message}</p>{row.detail.route && <p className="text-xs text-gray-400">{row.detail.route}</p>}</article>)}</div> : <p className="text-gray-400">Nenhum erro registrado neste período.</p>}
+        <button className={button} onClick={() => exportCsv('erros', [['Data','Origem','Código','Mensagem','Rota','Etapa','Diagnóstico'], ...report.errors.map(row => [date(row.occurred_at),row.detail.source,row.detail.code,row.detail.message,row.detail.route,row.detail.stage,row.detail.diagnostic])])}>Exportar erros exibidos CSV</button>
+        {report.errors.length ? <div className="space-y-3 max-h-96 overflow-auto">{report.errors.map(row => <article key={row.id} className="border border-red-400/20 bg-red-950/20 rounded-xl p-4"><p className="text-sm text-red-200">{row.detail.source} · {row.detail.code} · {date(row.occurred_at)}</p><p>{row.detail.message}</p>{row.detail.route && <p className="text-xs text-gray-400">Rota: {row.detail.route}</p>}{row.detail.stage && <p className="text-xs text-gray-300">Etapa: {row.detail.stage}</p>}{row.detail.diagnostic && <p className="text-xs text-gray-300">Diagnóstico: {row.detail.diagnostic}</p>}</article>)}</div> : <p className="text-gray-400">Nenhum erro registrado neste período.</p>}
       </Section>
     </>}
   </div>;

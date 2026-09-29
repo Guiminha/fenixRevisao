@@ -4,6 +4,8 @@ import { Play, Info, ArrowUpRight } from "lucide-react";
 import { useStore } from "../store";
 import { motion, AnimatePresence } from "motion/react";
 import { imageVariant, imageSources } from "../utils/imageVariants";
+import { createPortal } from "react-dom";
+import QueroFazerParteModal from "./QueroFazerParteModal";
 
 interface HeroCarouselProps {
   slides: Novidade[];
@@ -82,6 +84,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   const descRef = useRef<HTMLParagraphElement>(null);
   const [titleSize, setTitleSize] = useState<number | null>(null);
   const [descSize, setDescSize] = useState<number | null>(null);
+  const [modalAberto, setModalAberto] = useState(false);
 
   const isSlideValid = (slide: any) => {
     if (!slide) return false;
@@ -152,7 +155,9 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
   const handleBannerButtonClick = (tipo: string | undefined, destino: string | undefined) => {
     if (!tipo || tipo === "nenhum") return;
 
-    if (tipo === "fenix-social" || (tipo === "pagina" && destino === "fenix-social")) {
+    if (tipo === "quero-fazer-parte") {
+      setModalAberto(true);
+    } else if (tipo === "fenix-social" || (tipo === "pagina" && destino === "fenix-social")) {
       setActiveView("fenix-social");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else if (tipo === "curso" || (tipo === "pagina" && destino === "escola-fenix")) {
@@ -222,19 +227,23 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
 
         {/* Dot indicators ficam sobre a imagem (mobile e desktop) */}
         {activeSlides.length > 1 && (
-          <div className="absolute bottom-3 left-4 sm:bottom-8 sm:left-12 z-25 flex items-center gap-1.5 md:gap-2">
+          <div className="absolute bottom-3 left-4 sm:bottom-0 sm:left-12 z-25 flex items-center gap-1.5 md:gap-2">
             {activeSlides.map((_, index) => (
               <button
                 key={index}
                 id={`hero-carousel-dot-${index}`}
+                type="button"
                 onClick={() => setCurrentIndex(index)}
-                className={`h-1 transition-all duration-300 ${
-                  index === currentIndex 
-                    ? "w-6 md:w-8 bg-[#d12a62] shadow-[0_0_8px_rgba(209,42,98,0.4)]" 
-                    : "w-1.5 md:w-2 bg-white/20 hover:bg-white/40 cursor-pointer"
-                }`}
+                className="group flex h-8 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ff82ac]"
                 aria-label={`Slide ${index + 1}`}
-              ></button>
+                aria-current={index === currentIndex ? "true" : undefined}
+              >
+                <span aria-hidden="true" className={`h-3 rounded-full transition-all duration-300 ${
+                  index === currentIndex
+                    ? "w-8 bg-[#d12a62] shadow-[0_0_10px_rgba(209,42,98,0.5)]"
+                    : "w-3 bg-white/60 group-hover:bg-white/90"
+                }`} />
+              </button>
             ))}
           </div>
         )}
@@ -372,6 +381,7 @@ export default function HeroCarousel({ slides, onPlayClick, onInfoClick }: HeroC
         </motion.div>
       </div>
 
+      {modalAberto && createPortal(<QueroFazerParteModal isOpen onClose={() => setModalAberto(false)} />, document.body)}
     </div>
   );
 }

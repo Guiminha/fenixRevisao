@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getSupabaseTrustedClient } from './db.js';
+import { describeFailure } from './errorDiagnostics.js';
 
 type Kind = 'login' | 'download' | 'course' | 'training' | 'di_new' | 'di_status' | 'error';
 export type Metric = { kind: Kind; actor?: string; entity_id?: string; detail?: Record<string, unknown> };
@@ -17,10 +18,10 @@ export async function recordMetrics(events: Metric[]): Promise<void> {
       ...event, id: crypto.randomUUID(), occurred_at: new Date().toISOString(),
     }))).abortSignal(AbortSignal.timeout(5000));
     if (error) throw error;
-  } catch {
+  } catch (error) {
     failedWrites += events.length;
     lastFailure = new Date().toISOString();
-    console.error('[Metrics] Falha de gravação; consulte o aviso de coleta no painel.');
+    console.error('[Metrics] Falha de gravação; consulte o aviso de coleta no painel.', describeFailure(error).diagnostic);
   }
 }
 export function recordMetric(event: Metric) { return recordMetrics([event]); }
@@ -34,13 +35,13 @@ export async function metricsReport(days: number) {
 }
 
 const recentErrors = new Map<string, number>();
-export function reportSystemError(source: string, code: string, message: string, route?: string) {
+export function reportSystemError(source: string, code: string, message: string, route?: string, context?: { stage?: string; diagnostic?: string }) {
   // Evita uma cascata de erros quando uma integração está indisponível.
-  const key = `${source}:${code}:${route || ''}`;
+  const key = `${source}:${code}:${route || ''}:${context?.stage || ''}:${context?.diagnostic || ''}`;
   const now = Date.now();
   if ((recentErrors.get(key) || 0) > now - 60000) return;
   for (const [k, t] of recentErrors) if (t < now - 60000) recentErrors.delete(k);
   if (recentErrors.size >= 500) return;
   recentErrors.set(key, now);
-  void recordMetric({ kind: 'error', detail: { source, code, message, route } });
+  void recordMetric({ kind: 'error', detail: { source, code, message, route, ...context } });
 }

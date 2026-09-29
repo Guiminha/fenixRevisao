@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useStore } from "../store";
-import LoginModal from "./LoginModal";
 import Reveal from "./Reveal";
+import PublicPageStatus from "./PublicPageStatus";
 import { 
   Download, 
   Search, 
@@ -51,10 +51,9 @@ function getYouTubeThumbnailUrl(url: string): string | null {
 
 export default function ConteudosView() {
   const { 
-    loggedIn, 
-    restrictedData, 
-    fetchRestrictedData,
-    recordDownload
+    publicData,
+    publicDataError,
+    fetchPublicData
   } = useStore();
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,16 +66,14 @@ export default function ConteudosView() {
     mensagem?: string;
   } | null>(null);
 
-  // Carregar dados restrito
+  // Materiais de Apoio são públicos, inclusive para visitantes sem sessão.
   useEffect(() => {
-    if (loggedIn) {
-      fetchRestrictedData();
-    }
-  }, [loggedIn]);
+    if (!publicData && !publicDataError) void fetchPublicData();
+  }, [publicData, publicDataError, fetchPublicData]);
 
   // Deep-link scroll
   useEffect(() => {
-    if (restrictedData?.materiais) {
+    if (publicData?.materiais) {
       const searchParams = new URLSearchParams(window.location.search);
       const matId = searchParams.get("material") || searchParams.get("materialId");
       if (matId) {
@@ -92,19 +89,10 @@ export default function ConteudosView() {
         }, 300);
       }
     }
-  }, [restrictedData]);
+  }, [publicData]);
 
-  // Guard: não logado
-  if (!loggedIn) {
-    return (
-      <div id="conteudos-auth-guard" className="min-h-[70vh] flex flex-col items-center justify-center p-4">
-        <LoginModal />
-      </div>
-    );
-  }
-
-  // Guard: carregando
-  if (!restrictedData) {
+  if (!publicData) {
+    if (publicDataError) return <PublicPageStatus failed retry={fetchPublicData} />;
     return (
       <div className="space-y-8 py-8 animate-pulse">
         <div className="h-6 w-32 bg-[#151b22] rounded"></div>
@@ -119,97 +107,43 @@ export default function ConteudosView() {
     );
   }
 
-  const materiais = restrictedData?.materiais || [];
+  const materiais = (publicData.materiais || []) as Material[];
 
   const handleDownload = async (material: Material) => {
-    const raw = material.fileUrl || "";
-    if (!/^(https?:\/\/|\/|\.\/|\.\.\/)/i.test(raw)) return;
-
     setDownloadingId(material.id);
     setDownloadFeedback({
       id: material.id,
       titulo: material.titulo,
       status: "preparando",
-      mensagem: "Preparando seu download com segurança..."
+      mensagem: "Preparando o arquivo..."
     });
 
     try {
-      recordDownload(material.id);
-
-      // Tratar extensão e nome de download
-      let downloadUrl = raw;
-      const cleanUrl = raw.split("?")[0];
-      const rawExt = cleanUrl.includes(".") ? cleanUrl.split(".").pop() : "";
-      const defaultExt = material.tipo === "pdf" ? "pdf" : (material.tipo === "image" ? "png" : "dat");
-      const ext = (rawExt && rawExt.length <= 5) ? rawExt : defaultExt;
-      const filename = `${material.titulo.replace(/[/\\?%*:|"<>]/g, "-")}.${ext}`;
-
-      if (downloadUrl.startsWith("/") || downloadUrl.startsWith(window.location.origin)) {
-        const sep = downloadUrl.includes("?") ? "&" : "?";
-        downloadUrl = `${downloadUrl}${sep}download=1&filename=${encodeURIComponent(filename)}`;
-      }
-
-      const res = await fetch(downloadUrl);
-      if (!res.ok) {
-        throw new Error(`Servidor respondeu com status ${res.status}`);
-      }
-
-      const blob = await res.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
+      // Download nativo mantém o arquivo em streaming, sem duplicar a transferência
+      // nem carregar arquivos grandes inteiros na memória do navegador.
       const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = filename;
+      link.href = `/api/content/download/${encodeURIComponent(material.id)}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-
-      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 15000);
 
       setDownloadFeedback({
         id: material.id,
         titulo: material.titulo,
         status: "sucesso",
-        mensagem: "Download concluído com sucesso!"
+        mensagem: "Download iniciado pelo navegador."
       });
 
       setTimeout(() => {
         setDownloadFeedback((curr) => (curr?.id === material.id && curr.status === "sucesso" ? null : curr));
       }, 4000);
-    } catch (err: any) {
-      console.warn("[Download] Falha no fetch direto do blob, acionando fallback nativo:", err);
-      // Fallback seguro via link nativo do navegador
-      try {
-        const link = document.createElement("a");
-        link.href = raw;
-        link.download = material.titulo;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        setDownloadFeedback({
-          id: material.id,
-          titulo: material.titulo,
-          status: "sucesso",
-          mensagem: "Download acionado pelo navegador!"
-        });
-
-        setTimeout(() => {
-          setDownloadFeedback((curr) => (curr?.id === material.id && curr.status === "sucesso" ? null : curr));
-        }, 4000);
-      } catch (fallbackErr) {
-        setDownloadFeedback({
-          id: material.id,
-          titulo: material.titulo,
-          status: "erro",
-          mensagem: "Não foi possível baixar o arquivo. Tente novamente."
-        });
-
-        setTimeout(() => {
-          setDownloadFeedback((curr) => (curr?.id === material.id && curr.status === "erro" ? null : curr));
-        }, 4500);
-      }
+    } catch (err) {
+      setDownloadFeedback({
+        id: material.id,
+        titulo: material.titulo,
+        status: "erro",
+        mensagem: "Não foi possível iniciar o download. Tente novamente."
+      });
     } finally {
       setDownloadingId(null);
     }
@@ -232,7 +166,7 @@ export default function ConteudosView() {
       {/* Header */}
       <Reveal direction="up" className="space-y-1">
         <span className="bg-gold-metallic text-[#07090e] text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow w-max block">
-          Área Restrita
+          Acesso livre
         </span>
         <h2 className="text-2xl md:text-4xl font-bold font-display text-white tracking-tight">
           Materiais de Apoio
@@ -557,7 +491,7 @@ export default function ConteudosView() {
                   {downloadFeedback.status === "preparando"
                     ? "Iniciando download"
                     : downloadFeedback.status === "sucesso"
-                    ? "Download pronto!"
+                    ? "Download iniciado"
                     : "Falha no download"}
                 </span>
                 {downloadFeedback.status === "preparando" && (

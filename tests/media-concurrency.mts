@@ -22,11 +22,13 @@ try {
   assert.deepEqual(results, Array(8).fill('public'));
   assert.equal(requests, 1);
   publicFile = false;
-  assert.equal(await mediaPolicy('materiais/test.png'), 'member');
+  assert.equal(await mediaPolicy('materiais/test.png'), 'public', 'Material cadastrado é público mesmo com a marcação legada is_public=false.');
   assert.equal(requests, 2, 'Uma requisição posterior deve reconsultar as permissões.');
+  assert.equal(await mediaPolicy('materiais/sem-cadastro.pdf'), 'member');
+  assert.equal(await mediaPolicy('cursos/videos/aula.mp4'), 'member');
   assert.equal(await mediaPolicy('suporte-anexos/test.png'), 'blocked');
   assert.equal(await mediaPolicy('banners/public.jpg'), 'public');
   privateCourseFile = true;
   assert.equal(await mediaPolicy('banners/private.mp4'), 'member', 'Referências privadas de cursos prevalecem sobre a pasta pública.');
-  console.log('OK: 8 leituras simultâneas compartilham 1 consulta; mudança posterior de permissão é reconhecida e anexos continuam bloqueados.');
+  console.log('OK: material cadastrado público; arquivo órfão, curso e anexo protegidos; leituras simultâneas compartilhadas.');
 } finally { globalThis.fetch = savedFetch; }

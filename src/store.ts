@@ -48,6 +48,7 @@ interface PlatformState {
     paginaElite?: PaginaBloco[];
     paginaBiografia?: PaginaBloco[];
   } | null;
+  publicDataError: string | null;
   restrictedData: {
     cursos: Curso[];
     materiais: Material[];
@@ -117,7 +118,7 @@ interface PlatformState {
 
   // Nipponflex (D.I.s via API)
   nfStatus: any;
-  fetchNfStatus: () => Promise<{ success: boolean; estado?: any; logs?: any[]; metricas?: any; error?: string }>;
+  fetchNfStatus: (signal?: AbortSignal) => Promise<{ success: boolean; estado?: any; logs?: any[]; metricas?: any; error?: string }>;
   dispararNfSync: () => Promise<{ success: boolean; erro?: string }>;
   fetchDisFenixPage: (opts: { pagina: number; busca: string; situacao: string }) => Promise<{ success: boolean; itens?: any[]; total?: number; pagina?: number; totalPaginas?: number; error?: string }>;
   fetchSituacoesPermitidas: () => Promise<{ success: boolean; situacoes?: string[]; error?: string }>;
@@ -213,37 +214,8 @@ export const useStore = create<PlatformState>((set, get) => {
     moderationToken: null,
 
     // Content Data
-    publicData: {
-      leaderBio: defaultData.leaderBio,
-      novidades: defaultData.novidades,
-      cursos: defaultData.cursos.map(c => ({
-        id: c.id,
-        titulo: c.titulo,
-        descricao: c.descricao,
-        categoria: c.categoria,
-        nivel: c.nivel,
-        imagem: c.imagem,
-        duracao: c.duracao,
-        moduloCount: c.modulos?.length || 0
-      })),
-      materiais: defaultData.materiais.map(m => ({
-        id: m.id,
-        titulo: m.titulo,
-        tipo: m.tipo,
-        categoria: m.categoria,
-        thumbnail: m.thumbnail,
-        downloads: m.downloads,
-        isPublic: m.isPublic,
-        createdAt: m.createdAt
-      })),
-      banners: defaultData.banners || [],
-      categoriasMateriais: defaultData.categoriasMateriais || ["Negócios", "Produtos", "Apresentação", "Planejamento"],
-      tecnologias: defaultData.tecnologias || [],
-      logoUrl: undefined,
-      paginaTecnologias: defaultData.paginaTecnologias || [],
-      paginaElite: defaultData.paginaElite || [],
-      paginaBiografia: defaultData.paginaBiografia || []
-    },
+    publicData: null,
+    publicDataError: null,
     restrictedData: null,
 
     // Admin Data
@@ -396,106 +368,28 @@ export const useStore = create<PlatformState>((set, get) => {
       if (publicDataInflight) return publicDataInflight;
       publicDataInflight = (async () => {
       servidorIndisponivelAte = 0;
+      set({ publicDataError: null });
       try {
-        if (servidorDisponivel()) {
-          try {
-            const host = window.location.hostname.toLowerCase();
-            const fullContent = host === 'adminfenix' || host.startsWith('adminfenix.');
-            const res = await fetch(fullContent ? "/api/content/public" : "/api/content/public?scope=home");
-            const contentType = res.headers.get("content-type") || "";
-            if (res.ok && contentType.includes("application/json")) {
-              const data = await res.json();
-              if (data.hiddenHomeCardIds && Array.isArray(data.hiddenHomeCardIds)) {
-                const currentLocal = get().hiddenHomeCardIds || [];
-                const merged = Array.from(new Set([...currentLocal, ...data.hiddenHomeCardIds]));
-                set({ hiddenHomeCardIds: merged });
-                try {
-                  localStorage.setItem("fenix_hidden_home_cards", JSON.stringify(merged));
-                } catch (e) {}
-              }
-              set({ publicData: { ...get().publicData, ...data } });
-              return;
-            } else {
-              console.warn("Express backend not available (returned non-JSON/HTML). Servidor indisponível — dados padrão.");
-              marcarServidorIndisponivel();
-            }
-          } catch (fetchErr) {
-            console.warn("Express backend connection failed. Servidor indisponível — dados padrão.");
-            marcarServidorIndisponivel();
-          }
+        if (!servidorDisponivel()) throw new Error("Servidor temporariamente indisponível.");
+        const host = window.location.hostname.toLowerCase();
+        const fullContent = host === 'adminfenix' || host.startsWith('adminfenix.');
+        const res = await fetch(fullContent ? "/api/content/public" : "/api/content/public?scope=home");
+        const contentType = res.headers.get("content-type") || "";
+        if (!res.ok || !contentType.includes("application/json")) {
+          marcarServidorIndisponivel();
+          throw new Error(`Conteúdo indisponível (HTTP ${res.status}).`);
         }
-
-        // Sem fallback direto ao Supabase: o frontend NÃO acessa o banco.
-        // Em caso de servidor indisponível, usa dados padrão (read-only).
-        console.warn("Servidor indisponível. Usando dados padrão locais (read-only).");
-        set({
-            publicData: {
-              leaderBio: defaultData.leaderBio,
-              novidades: defaultData.novidades,
-              cursos: defaultData.cursos.map(c => ({
-                id: c.id,
-                titulo: c.titulo,
-                descricao: c.descricao,
-                categoria: c.categoria,
-                nivel: c.nivel,
-                imagem: c.imagem,
-                duracao: c.duracao,
-                moduloCount: c.modulos?.length || 0
-              })),
-              materiais: defaultData.materiais.map(m => ({
-                id: m.id,
-                titulo: m.titulo,
-                tipo: m.tipo,
-                categoria: m.categoria,
-                thumbnail: m.thumbnail,
-                downloads: m.downloads,
-                isPublic: m.isPublic,
-                createdAt: m.createdAt
-              })),
-              banners: defaultData.banners || [],
-              categoriasMateriais: defaultData.categoriasMateriais || ["Negócios", "Produtos", "Apresentação", "Planejamento"],
-              tecnologias: defaultData.tecnologias || [],
-              logoUrl: undefined,
-              paginaTecnologias: defaultData.paginaTecnologias || [],
-              paginaElite: defaultData.paginaElite || [],
-              paginaBiografia: defaultData.paginaBiografia || []
-            }
-          });
+        const data = await res.json();
+        if (data.hiddenHomeCardIds && Array.isArray(data.hiddenHomeCardIds)) {
+          const currentLocal = get().hiddenHomeCardIds || [];
+          const merged = Array.from(new Set([...currentLocal, ...data.hiddenHomeCardIds]));
+          set({ hiddenHomeCardIds: merged });
+          try { localStorage.setItem("fenix_hidden_home_cards", JSON.stringify(merged)); } catch (e) {}
+        }
+        set({ publicData: { ...get().publicData, ...data }, publicDataError: null });
       } catch (e) {
-        console.error("Failed to fetch public data in fallback flow", e);
-        set({
-          publicData: {
-            leaderBio: defaultData.leaderBio,
-            novidades: defaultData.novidades,
-            cursos: defaultData.cursos.map(c => ({
-              id: c.id,
-              titulo: c.titulo,
-              descricao: c.descricao,
-              categoria: c.categoria,
-              nivel: c.nivel,
-              imagem: c.imagem,
-              duracao: c.duracao,
-              moduloCount: c.modulos?.length || 0
-            })),
-            materiais: defaultData.materiais.map(m => ({
-              id: m.id,
-              titulo: m.titulo,
-              tipo: m.tipo,
-              categoria: m.categoria,
-              thumbnail: m.thumbnail,
-              downloads: m.downloads,
-              isPublic: m.isPublic,
-              createdAt: m.createdAt
-            })),
-            banners: defaultData.banners || [],
-            categoriasMateriais: defaultData.categoriasMateriais || ["Negócios", "Produtos", "Apresentação", "Planejamento"],
-            tecnologias: defaultData.tecnologias || [],
-            logoUrl: undefined,
-            paginaTecnologias: defaultData.paginaTecnologias || [],
-            paginaElite: defaultData.paginaElite || [],
-            paginaBiografia: defaultData.paginaBiografia || []
-          }
-        });
+        console.error("Falha ao carregar conteúdo público:", e);
+        set({ publicData: null, publicDataError: "Não foi possível carregar o conteúdo do site." });
       }
       })();
       try {
@@ -961,12 +855,17 @@ export const useStore = create<PlatformState>((set, get) => {
     },
 
     // ---- Nipponflex (D.I.s via API) ----
-    fetchNfStatus: async () => {
+    fetchNfStatus: async (signal) => {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) controller.abort();
+      const timeout = setTimeout(abort, 15_000);
       try {
         const headers: HeadersInit = {};
         const token = get().token;
         if (token) headers["Authorization"] = `Bearer ${token}`;
-        const res = await fetch("/api/admin/nipponflex/status", { headers });
+        const res = await fetch("/api/admin/nipponflex/status", { headers, signal: controller.signal, cache: 'no-store' });
         const result = await res.json();
         if (res.ok && result.success) {
           set({ nfStatus: { estado: result.estado, logs: result.logs || [], metricas: result.metricas } });
@@ -974,7 +873,10 @@ export const useStore = create<PlatformState>((set, get) => {
         }
         return { success: false, error: result.error || "Erro ao obter status." };
       } catch (e: any) {
-        return { success: false, error: e.message || "Erro de conexão." };
+        return { success: false, error: controller.signal.aborted ? "A consulta de status não respondeu em 15 segundos." : (e.message || "Erro de conexão.") };
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
       }
     },
     dispararNfSync: async () => {

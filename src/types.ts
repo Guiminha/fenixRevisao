@@ -114,10 +114,10 @@ export interface Banner {
   corDescricao?: string;
   botoesAtivos: boolean;
   btn1Texto?: string;
-  btn1Tipo?: "pagina" | "curso" | "material" | "externo" | "nenhum";
+  btn1Tipo?: "pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum";
   btn1Destino?: string;
   btn2Texto?: string;
-  btn2Tipo?: "pagina" | "curso" | "material" | "externo" | "nenhum";
+  btn2Tipo?: "pagina" | "curso" | "material" | "externo" | "quero-fazer-parte" | "nenhum";
   btn2Destino?: string;
   ordem?: number;
   createdAt: string;

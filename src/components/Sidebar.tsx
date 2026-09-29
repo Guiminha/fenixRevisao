@@ -90,7 +90,7 @@ export default function Sidebar() {
     { id: "tecnologias", label: "Tecnologias", icon: Brain },
     { id: "elite-milionario", label: "Elite Milionária", icon: Crown },
     { id: "escola-fenix", label: "Escola Fênix", icon: GraduationCap, restricted: true },
-    { id: "conteudos", label: "Materiais de Apoio", icon: FolderDown, restricted: true },
+    { id: "conteudos", label: "Materiais de Apoio", icon: FolderDown },
     { id: "suporte", label: "Suporte", icon: LifeBuoy, restricted: true }
   ];
 
@@ -454,7 +454,7 @@ return (
                     Acesso Limitado 🔒
                   </div>
                   <p className="text-[11px] text-[#8a96a3] leading-relaxed">
-                    Acesse todos os cursos e materiais com seu código.
+                    Acesse os cursos e treinamentos com seu código.
                   </p>
                   <button
                     id="mobile-login-btn"

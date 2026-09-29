@@ -5,11 +5,13 @@ import ContentCard from "./ContentCard";
 import Reveal from "./Reveal";
 import { Lock, Sparkles } from "lucide-react";
 import { Curso, Material, Novidade } from "../types";
+import PublicPageStatus from "./PublicPageStatus";
 
 export default function InicioView() {
   const { 
     publicData, 
     fetchPublicData, 
+    publicDataError,
     fenixPosts,
     fetchFenixPosts,
     setActiveView, 
@@ -187,6 +189,7 @@ export default function InicioView() {
   };
 
   if (!publicData) {
+    if (publicDataError) return <PublicPageStatus failed retry={fetchPublicData} message="O conteúdo do site está temporariamente indisponível." />;
     return (
       <div className="-mx-4 sm:-mx-6 lg:-mx-10 -mt-6 sm:-mt-8 lg:-mt-10 flex flex-col gap-8 pb-12 animate-pulse">
         <div className="h-[50vh] sm:h-[58vh] lg:h-[65vh] w-full bg-gradient-to-r from-white/[0.03] to-transparent border-b border-white/[0.02]"></div>

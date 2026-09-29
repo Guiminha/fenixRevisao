@@ -60,6 +60,8 @@ server: {
           '**/Vulnerabilidades.txt',
           '**/Correcoes-Seguranca.txt',
           '**/AGENTS.md',
+          '**/estado_plataforma.md',
+          '**/estado_plataforma_fenix.md',
           'data/**',
           'dev-tools/**',
           'uploads/**',
