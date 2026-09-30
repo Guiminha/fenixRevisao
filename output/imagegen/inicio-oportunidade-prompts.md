@@ -1,0 +1,8 @@
+Imagens criadas com a ferramenta integrada image_gen em 30/09/2026.
+Mídias do site: bucket armazenamento, pasta paginas. Cópias locais para referência, sem fallback público em disco.
+
+## Equipe
+Use case: ads-marketing. Create a premium photorealistic editorial landscape photograph, 3:2 aspect ratio, for Grupo Fênix business opportunity website. Six successful Brazilian entrepreneurs, three men and three women, diverse skin tones, ages 30-55, elegant business attire in charcoal and cream with subtle magenta accents. Standing together outdoors on a modern terrace at sunset, confident warm natural smiles, tasteful sculptural golden phoenix rising behind them, dark modern architecture and warm city skyline. Candid magazine quality, realistic faces and hands, no meeting rooms, no computers, no charts, no money, no text, no logos. Balanced group portrait suitable for a horizontal website card. Main focus human community and leadership.
+
+## Bem-estar
+Use case: ads-marketing. Create a sophisticated conceptual photographic landscape image 3:2 for a wellness technologies business website. A peaceful contemporary bedroom scene in charcoal and off-white with subtle magenta accent lighting. A professional woman age 40 looking relaxed and refreshed, seated on edge of bed beside a natural white pillow. Abstract golden particles and very subtle warm flowing light near the mattress evoke technology and daily well-being. Premium editorial photography, realistic skin, fabric textures, understated clean environment. No text, no logos, no medical claims, no invented branded devices, no graphs, no computer screens. This is an illustrative lifestyle image, not a catalog of actual products.

@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from "react";
 import { useStore } from "../store";
 import HeroCarousel from "./HeroCarousel";
+import BusinessOpportunity from "./BusinessOpportunity";
 import ContentCard from "./ContentCard";
 import Reveal from "./Reveal";
 import { Lock, Sparkles } from "lucide-react";
@@ -251,10 +252,16 @@ export default function InicioView() {
     (novidades || []).filter((n) => n.isFeatured && isCardVisibleOnHome(n))
   );
 
-  // Combine ALL published contents across the platform (Novidades, Cursos, Materiais, and Fênix Social)
+  const isTraining = (c: any) => c.secao === "treinamentos" || c.secao === "series" || c.categoria === "Séries" || c.categoria === "Treinamentos";
+  const courseIds = new Set(cursos.filter((c) => !isTraining(c)).map((c) => c.id));
+  const isHomeCardVisible = (item: any) => isCardVisibleOnHome(item)
+    && !courseIds.has(item.id)
+    && !(item.linkType === "curso" && courseIds.has(item.linkTarget));
+
+  // Cards da tela inicial: novidades, treinamentos, materiais e Fênix Social.
   const allContents = [
     ...(novidades || [])
-      .filter((n) => isCardVisibleOnHome(n))
+      .filter((n) => isHomeCardVisible(n))
       .map((n) => {
         const isMaterial = (n as any).contentType === "material" || n.linkType === "material" || (n as any).fileUrl || ((n.linkType as string) === "pagina" && n.linkTarget === "conteudos");
         return {
@@ -266,7 +273,7 @@ export default function InicioView() {
         };
       }),
     ...(cursos || [])
-      .filter(isCardVisibleOnHome)
+      .filter((c) => isCardVisibleOnHome(c) && isTraining(c))
       .map((c) => ({
         ...c,
         contentType: "course" as const,
@@ -297,10 +304,6 @@ export default function InicioView() {
       }))
   ];
 
-  const cursosList = sortByNewest(
-    cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "cursos" || (!c.secao && c.categoria !== "Séries" && c.categoria !== "Treinamentos")))
-  ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Curso" }));
-
   const treinamentosList = sortByNewest(
     cursos.filter((c) => isCardVisibleOnHome(c) && (c.secao === "treinamentos" || c.secao === "series" || c.categoria === "Séries" || c.categoria === "Treinamentos"))
   ).map((c) => ({ ...c, contentType: "course" as const, displayType: "course" as const, displayCategory: "Treinamento" }));
@@ -314,7 +317,7 @@ export default function InicioView() {
   }));
 
   const explicitNovidades = sortByNewest(
-    (novidades || []).filter((n) => isCardVisibleOnHome(n))
+    (novidades || []).filter((n) => isHomeCardVisible(n))
   ).map((n) => {
     const isMaterial = (n as any).contentType === "material" || n.linkType === "material" || (n as any).fileUrl || ((n.linkType as string) === "pagina" && n.linkTarget === "conteudos");
     return {
@@ -326,7 +329,7 @@ export default function InicioView() {
     };
   });
 
-  // Vitrine de lançamento inteligente: alterna Cursos, Treinamentos e Materiais
+  // Vitrine de lançamento: alterna Treinamentos e Materiais
   const mixLancamento: any[] = [];
   const seenIds = new Set<string>();
 
@@ -338,13 +341,9 @@ export default function InicioView() {
     }
   }
 
-  // Intercala 1 Curso -> 1 Treinamento -> 1 Material sequencialmente
-  const maxItems = Math.max(cursosList.length, treinamentosList.length, materiaisList.length);
+  // Intercala 1 Treinamento -> 1 Material sequencialmente
+  const maxItems = Math.max(treinamentosList.length, materiaisList.length);
   for (let i = 0; i < maxItems && mixLancamento.length < 24; i++) {
-    if (cursosList[i] && !seenIds.has(cursosList[i].id)) {
-      mixLancamento.push(cursosList[i]);
-      seenIds.add(cursosList[i].id);
-    }
     if (treinamentosList[i] && !seenIds.has(treinamentosList[i].id)) {
       mixLancamento.push(treinamentosList[i]);
       seenIds.add(treinamentosList[i].id);
@@ -402,10 +401,10 @@ export default function InicioView() {
           </div>
         </div>
 
-        {/* Grid de 3 fileiras (sem rolagem lateral) */}
+        {/* Até duas fileiras em cada tamanho de tela. */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
-          {list.slice(0, 12).map((item, index) => (
-            <div key={`${item.contentType || type}-${item.id}`} className="transition-all duration-300 hover:scale-[1.01]">
+          {list.slice(0, 8).map((item, index) => (
+            <div key={`${item.contentType || type}-${item.id}`} className={`${index >= 6 ? "hidden lg:block" : index >= 4 ? "hidden sm:block" : ""} transition-all duration-300 hover:scale-[1.01]`}>
               <ContentCard
                 id={item.id}
                 titulo={item.titulo}
@@ -439,6 +438,7 @@ export default function InicioView() {
 
       {/* 2. Horizontal Rows */}
       <div className="space-y-12 sm:space-y-16 px-4 sm:px-6 lg:px-10 pt-4 sm:pt-6">
+        <BusinessOpportunity />
         {allContents.length === 0 ? (
           <div className="text-center py-16 px-6 rounded-2xl border border-dashed border-white/10 bg-white/[0.01] max-w-2xl mx-auto my-6">
             <div className="w-12 h-12 rounded-2xl bg-[#d12a62]/10 border border-[#d12a62]/20 flex items-center justify-center text-[#ff719e] mx-auto mb-4">
@@ -456,17 +456,6 @@ export default function InicioView() {
               list={novidadesList}
               type="news"
               containerRef={refs.novidades}
-            />
-
-            <CarouselRow
-              title="Cursos em Destaque"
-              list={cursosList}
-              type="course"
-              containerRef={refs.cursos}
-              viewAllAction={() => {
-                setActiveView("escola-fenix");
-                setSubView("cursos");
-              }}
             />
 
             <CarouselRow
