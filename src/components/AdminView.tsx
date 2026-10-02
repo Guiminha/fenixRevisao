@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { AdminOverview } from './AdminOverview';
 import { ExternalServers } from './ExternalServers';
+import DILoginBlocks from './DILoginBlocks';
 import { UploadProgressBar, UploadProgressState } from "./UploadProgressBar";
 import { uploadFileWithProgress } from "../utils/uploadWithProgress";
 import { useStore } from "../store";
@@ -154,7 +155,7 @@ export default function AdminView() {
   const [nfTotalPaginas, setNfTotalPaginas] = useState(0);
   const [nfPagina, setNfPagina] = useState(1);
   const [nfBusca, setNfBusca] = useState("");
-  const [nfFiltroSit, setNfFiltroSit] = useState("todos");
+  const [nfFiltroSit, setNfFiltroSit] = useState("A");
   const [nfCarregando, setNfCarregando] = useState(false);
   const [nfSyncing, setNfSyncing] = useState(false);
   const nfConsultaEmAndamento = useRef(false);
@@ -276,7 +277,7 @@ export default function AdminView() {
     const linhas = nfLogs.length
       ? nfLogs.map((l) => `- \`${l.ts}\` **${l.nivel}**: ${l.msg}`).join("\n")
       : "Nenhum log registrado.";
-    const conteudo = `# Log da Sincronização Nipponflex\n\n- **Data de exportação:** ${data}\n- **Status:** ${nfEstado?.status || "—"}\n- **Última atualização:** ${nfEstado?.ultimaSincronizacao ? new Date(nfEstado.ultimaSincronizacao).toLocaleString("pt-BR") : "—"}\n\n## Logs\n\n${linhas}\n`;
+    const conteudo = `# Log da última sincronização Nipponflex\n\n- **Data de exportação:** ${data}\n- **Status:** ${nfEstado?.status || "—"}\n- **Última atualização:** ${nfEstado?.ultimaSincronizacao ? new Date(nfEstado.ultimaSincronizacao).toLocaleString("pt-BR") : "—"}\n\n## Logs\n\n${linhas}\n`;
     const blob = new Blob([conteudo], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1739,6 +1740,7 @@ export default function AdminView() {
       {/* TAB CONTENT: D.I.s (via API Nipponflex) */}
       {activeTab === "cadastrar-di" && (
         <div className="space-y-8 animate-fadeIn">
+          <DILoginBlocks />
           {/* Header Banner */}
           <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
@@ -1747,7 +1749,7 @@ export default function AdminView() {
             <div className="relative z-10 space-y-3 max-w-3xl">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono font-bold">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                Sincronização automática via API Nipponflex
+                Sincronização incremental via API Nipponflex
               </div>
               <h2 className="text-xl md:text-2xl font-black text-white uppercase tracking-tight font-display flex items-center gap-3">
                 <KeyRound className="w-7 h-7 text-[#d12a62]" />
@@ -1766,28 +1768,14 @@ export default function AdminView() {
               <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-5 shadow-xl">
                 <h3 className="text-sm font-bold text-white font-display mb-4 flex items-center gap-2">
                   <BarChart3 className="w-4 h-4 text-[#d12a62]" />
-                  Quantidade de D.I.s no Grupo Fênix
+                  D.I.s ativos na base de acesso
                 </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {[
-                    { chave: "A", label: "Ativos", cor: "text-emerald-400", bg: "bg-emerald-500/10 border-emerald-500/20" },
-                    { chave: "I", label: "Inativos", cor: "text-slate-300", bg: "bg-white/5 border-white/10" },
-                    { chave: "P", label: "Pendentes", cor: "text-amber-400", bg: "bg-amber-500/10 border-amber-500/20" },
-                    { chave: "S", label: "Suspensos", cor: "text-orange-400", bg: "bg-orange-500/10 border-orange-500/20" },
-                    { chave: "D", label: "Descredenciados", cor: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
-                    ...(nfMetricas?.porSituacao?.outros ? [{ chave: "outros", label: "Outros", cor: "text-violet-400", bg: "bg-violet-500/10 border-violet-500/20" }] : []),
-                  ].map((s) => (
-                    <div key={s.chave} className={`rounded-2xl p-4 border ${s.bg}`}>
-                      <div className={`text-2xl font-black font-mono ${s.cor}`}>{(nfMetricas?.porSituacao?.[s.chave] || 0).toLocaleString("pt-BR")}</div>
-                      <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-1 font-bold">{s.label}</div>
-                    </div>
-                  ))}
-                  <div className="rounded-2xl p-4 border bg-[#d12a62]/10 border-[#d12a62]/20">
-                    <div className="text-2xl font-black font-mono text-[#ff719e]">{(nfMetricas?.total || 0).toLocaleString("pt-BR")}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-1 font-bold">Total</div>
-                  </div>
+                <div className="rounded-2xl p-4 border bg-emerald-500/10 border-emerald-500/20">
+                  <div className="text-2xl font-black font-mono text-emerald-400">{(nfMetricas?.porSituacao?.A || 0).toLocaleString("pt-BR")}</div>
+                  <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-1 font-bold">Ativos</div>
                 </div>
               </div>
+              <p className="text-xs text-[#8a96a3]">A consulta diária recebe alterações de todas as situações e mantém somente ativos na base de acesso após concluir. Registros legados não ativos serão retirados com backup na próxima sincronização bem-sucedida.</p>
             </div>
 
             {/* Card Estado do Sistema */}
@@ -1803,6 +1791,7 @@ export default function AdminView() {
                 <div className="space-y-2.5 text-xs">
                   <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Última atualização</span><strong className="text-white">{nfUltimaAtualizacao}</strong></div>
                   <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Última consulta ao servidor</span><span>{nfUltimaConsulta ? nfUltimaConsulta.toLocaleTimeString('pt-BR') : 'Aguardando confirmação'}</span></div>
+                  {nfEstado?.modoSincronizacao && <div className="flex justify-between gap-2"><span className="text-[#8a96a3]">Consulta da rodada</span><strong>{nfEstado.modoSincronizacao === "incremental" ? `Incremental desde ${nfEstado.dataBaseConsulta}` : "Carga inicial completa"}</strong></div>}
                   {nfErroConsulta && <p role="alert" className="text-amber-300">{nfErroConsulta} Os dados exibidos são da última consulta. Tentaremos atualizar automaticamente.</p>}
                   {nfEstado?.erro && (
                     <div className="mt-2 p-2.5 rounded-xl bg-red-950/30 border border-red-500/25 text-red-400 text-[11px] leading-relaxed">
@@ -1821,7 +1810,7 @@ export default function AdminView() {
                 </button>
 
                 {/* Card de Alterações da Última Atualização */}
-                {!nfTemRelatorio && <p className="text-xs text-[#8a96a3] mt-3">O resumo de novos cadastros e mudanças de situação será exibido após a próxima sincronização concluída.</p>}
+                {!nfTemRelatorio && <p className="text-xs text-[#8a96a3] mt-3">O resumo de novos cadastros, reativações e saídas será exibido após a próxima sincronização concluída.</p>}
                 {nfTemRelatorio && (() => {
                   const semAlteracoes = nfNovosDetalhes.length === 0 && nfSituacoesAlteradas.length === 0;
                   const nomeSit = (s: string) => ({ A: "Ativo", I: "Inativo", P: "Pendente", S: "Suspenso", D: "Descredenciado" } as Record<string, string>)[s] || s;
@@ -1854,7 +1843,7 @@ export default function AdminView() {
                               <div className={`text-xl font-black font-mono ${nfNovosDetalhes.length > 0 ? "text-emerald-400" : "text-[#8a96a3]"}`}>
                                 +{nfNovosDetalhes.length.toLocaleString("pt-BR")}
                               </div>
-                              <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-0.5 font-bold">Novos ingressantes</div>
+                              <div className="text-[10px] uppercase tracking-wider text-[#8a96a3] mt-0.5 font-bold">Novos ou reativados</div>
                             </div>
                             <div className={`rounded-xl border p-3 ${nfSituacoesAlteradas.length > 0 ? "bg-amber-500/8 border-amber-500/20" : "bg-white/[0.03] border-white/8"}`}>
                               <div className={`text-xl font-black font-mono ${nfSituacoesAlteradas.length > 0 ? "text-amber-400" : "text-[#8a96a3]"}`}>
@@ -1883,7 +1872,7 @@ export default function AdminView() {
                             <details open={nfNovosDetalhes.length <= 5}>
                               <summary className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#8a96a3] font-bold cursor-pointer hover:text-white transition-colors py-1">
                                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-0.5" />
-                                Novos D.I.s ({nfNovosDetalhes.length})
+                                Novos ou reativados ({nfNovosDetalhes.length})
                               </summary>
                               <div className="mt-2 max-h-40 overflow-y-auto scrollbar-slim space-y-1">
                                 {nfNovosDetalhes.map((di) => (
@@ -1927,7 +1916,7 @@ export default function AdminView() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-white font-display flex items-center gap-2">
                 <Activity className="w-4 h-4 text-[#d12a62]" />
-                Logs da Sincronização
+                Logs da última sincronização
               </h3>
               {nfEstado?.status === "em_andamento" && !nfErroConsulta && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold uppercase tracking-wider">
@@ -1953,6 +1942,7 @@ export default function AdminView() {
                 Limpar Logs
               </button>
             </div>
+            <p className="mb-3 text-[11px] text-[#8a96a3]">Somente a última sincronização. Data e hora de Brasília; ao iniciar outra, os registros anteriores são substituídos.</p>
             <div className="max-h-64 overflow-y-auto rounded-xl bg-[#0b0f14] border border-white/5 p-3 font-mono text-[11px] leading-relaxed scrollbar-slim">
               {nfLogs.length === 0 ? (
                 <span className="text-[#5c6672]">Nenhum log ainda. Clique em "SINCRONIZAR DADOS" para iniciar o processo.</span>
@@ -1969,16 +1959,12 @@ export default function AdminView() {
           <div className="bg-[#151b22]/80 border border-white/5 rounded-3xl p-6 shadow-xl">
             <h3 className="text-sm font-bold text-white font-display mb-1 flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-[#d12a62]" />
-              Quem pode acessar a área restrita
+              Acesso dos D.I.s ativos
             </h3>
-            <p className="text-[11px] text-[#8a96a3] mb-4">Marque as situações que podem logar no site. D.I.s com situação não marcada, mesmo cadastrados, não conseguem entrar.</p>
+            <p className="text-[11px] text-[#8a96a3] mb-4">Somente D.I.s ativos podem acessar. A sincronização retira os demais da base de acesso e preserva o histórico de suporte e alterações.</p>
             <div className="flex flex-wrap gap-3">
               {[
                 { v: "A", l: "Ativos (A)" },
-                { v: "I", l: "Inativos (I)" },
-                { v: "P", l: "Pendentes (P)" },
-                { v: "S", l: "Suspensos (S)" },
-                { v: "D", l: "Descredenciados (D)" }
               ].map((op) => (
                 <label key={op.v} className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer ${nfSituacoes.includes(op.v) ? "bg-[#d12a62]/15 border-[#d12a62]/40 text-[#ff719e]" : "bg-white/5 border-white/10 text-[#8a96a3]"}`}>
                   <input type="checkbox" checked={nfSituacoes.includes(op.v)} onChange={() => toggleNfSituacao(op.v)} className="accent-[#d12a62]" />
@@ -2003,14 +1989,7 @@ export default function AdminView() {
                     className="w-56 bg-[#0b0f14] border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-white outline-none focus:border-[#d12a62]/50"
                   />
                 </div>
-                <select value={nfFiltroSit} onChange={(e) => { setNfFiltroSit(e.target.value); setNfPagina(1); }} className="bg-[#0b0f14] border border-white/10 rounded-xl px-3 py-2 text-xs text-white outline-none">
-                  <option value="todos">Todas as situações</option>
-                  <option value="A">Ativos</option>
-                  <option value="I">Inativos</option>
-                  <option value="P">Pendentes</option>
-                  <option value="S">Suspensos</option>
-                  <option value="D">Descredenciados</option>
-                </select>
+                <span className="text-xs text-emerald-400">Somente ativos</span>
               </div>
             </div>
             <div className="overflow-x-auto">

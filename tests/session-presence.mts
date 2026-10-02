@@ -47,5 +47,14 @@ try {
   active.logout(rotated.access, rotated.refresh);
   assert.equal(await active.authenticate(rotated.access), null);
   assert.equal(active.presence(rotated.access, rotated.refresh, 'open-tab'), false);
+  const adminIdentity = { code: '11111111-1111-4111-8111-111111111111', role: 'admin' as const, name: 'Admin', version: 'v1' };
+  const admin = new SessionService('synthetic-admin-secret', async () => adminIdentity);
+  const adminTokens = await admin.create(adminIdentity);
+  for (let i=0;i<60;i++) {
+    now += 5_000;
+    assert.ok(await admin.authenticate(adminTokens.access), 'Polling autenticado deve manter a presença durante uma sincronização');
+  }
+  admin.logout(adminTokens.access, adminTokens.refresh);
+  assert.equal(await admin.authenticate(adminTokens.access), null);
   console.log('PASS: tabs, reload, late close, grace, crash, duplicate login, refresh and logout');
 } finally { Date.now = realNow; }

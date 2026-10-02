@@ -48,7 +48,7 @@ export default function App() {
     if (!loggedIn) return;
     return startSessionPresence(() => {
       // Clear private data as soon as the server confirms expiry.
-      void useStore.getState().logout();
+      void useStore.getState().logout(true);
     });
   }, [loggedIn]);
 

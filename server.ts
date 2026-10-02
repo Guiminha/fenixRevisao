@@ -53,6 +53,7 @@ import { getManutencaoStatus, setManutencao, collectMediaKeys, removeOrphanMedia
 import { getSmtpStatus, sendEmail, sendTestEmail, notifyNewLeadHtml } from "./src/server/mailService.js";
 
 import { asyncHandler, validLoginBody, storageKey, keyFromMediaUrl, parseByteRange, concurrencyLimit, publicPost } from "./src/server/security.js";
+import { diLoginProtection, listDILoginBlocks, releaseDILoginBlock } from './src/server/diLoginProtection.js';
 import { mediaPolicy } from "./src/server/mediaPolicy.js";
 import { SessionService, DuplicateDISessionError, type Identity } from "./src/server/sessionService.js";
 
@@ -382,7 +383,8 @@ async function resolveUser(req: any, res: any): Promise<Identity | null> {
     setSessionCookies(res, renewed);
     return (req.user = renewed.identity);
   }
-  if (req.cookies?.access_token || req.cookies?.refresh_token) clearSessionCookies(res);
+  // Cookies são apagados no logout explícito. Uma resposta atrasada não deve
+  // apagar os cookies de um login mais recente em outra aba.
   return null;
 }
 
@@ -497,7 +499,8 @@ function isSupportHost(req: any): boolean {
 const ADMIN_API_WHITELIST = [
   "/api/auth/login",
   "/api/auth/logout",
-  "/api/auth/me"
+  "/api/auth/me",
+  "/api/auth/presence"
 ];
 
 function isAdminApiPath(pathname: string): boolean {
@@ -626,7 +629,7 @@ async function requireSupportOrAdmin(req: any, res: any, next: () => void) {
 // ---------------- API ENDPOINTS ----------------
 
 // 1. Auth Endpoint
-app.post("/api/auth/login", loginRateLimiter, asyncHandler(async (req, res) => {
+app.post("/api/auth/login", diLoginProtection, (req, res, next) => req.body?.code !== undefined ? next() : loginRateLimiter(req, res, next), asyncHandler(async (req, res) => {
   if (!validLoginBody(req.body)) return res.status(400).json({ error: "Informe um código D.I. de 4 a 6 dígitos ou e-mail e senha válidos." });
   const { code, email, password } = req.body;
   let identity: Identity | null = null;
@@ -832,7 +835,7 @@ const serveMaterialDownload = asyncHandler(async (req: any, res) => {
         const filename = `${safeTitulo}${ext || ""}`;
         res.setHeader("Content-Type", mime);
         res.setHeader("X-Content-Type-Options", "nosniff");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/[^\x20-\x7E]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
         res.setHeader("Content-Length", String(stat.size));
         const stream = await client.getObject(STORAGE_BUCKET, objectKey, mediaAbortSignal(res));
         pipeMedia(stream, res);
@@ -3068,11 +3071,26 @@ app.post("/api/admin/nipponflex/sync", asyncHandler(requireAdmin), asyncHandler(
 }));
 
 // Lista paginada de D.I.s (nome, código, situação)
+app.get('/api/admin/security/di-login-blocks', asyncHandler(requireAdmin), asyncHandler(async (_req, res) => {
+  res.json(await listDILoginBlocks());
+}));
+app.post('/api/admin/security/di-login-blocks/release', asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
+  if (typeof req.body?.ip !== 'string' || req.body.ip.length > 45) return res.status(400).json({ error: 'IP inválido.' });
+  try {
+    await releaseDILoginBlock(req.body.ip);
+    await dbService.recordAuditLog(req.user.code, 'LIBERACAO_IP_LOGIN_DI', 'Bloqueio de login D.I. liberado pelo administrador.');
+    res.json({ success: true });
+  } catch {
+    res.status(503).json({ error: 'Não foi possível liberar o IP. Verifique a persistência no Supabase e tente novamente.' });
+  }
+}));
 app.get("/api/admin/nipponflex/dados", asyncHandler(requireAdmin), asyncHandler(async (req: any, res) => {
   try {
-    const pagina = Math.max(1, parseInt(String(req.query.pagina || "1"), 10) || 1);
+    if ((req.query.busca !== undefined && typeof req.query.busca !== 'string') || String(req.query.busca || '').length > 120) return res.status(400).json({ error: 'Informe uma busca de até 120 caracteres.' });
+    const pagina = Math.min(100_000, Math.max(1, parseInt(String(req.query.pagina || "1"), 10) || 1));
     const busca = String(req.query.busca || "").trim();
     const situacao = String(req.query.situacao || "todos").trim();
+    if (!['todos','A','I','P','S','D'].includes(situacao)) return res.status(400).json({ error: 'Situação inválida.' });
     const result = await obterDisPaginado(pagina, busca, situacao);
     res.json({ success: true, ...result });
   } catch (err: any) {
@@ -3085,7 +3103,7 @@ app.get("/api/admin/nipponflex/situacoes-permitidas", asyncHandler(requireAdmin)
   try {
     const client = getSupabaseTrustedClient();
     const { data } = await client!.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
-    res.json({ success: true, situacoes: Array.isArray(data?.value) ? data.value : ["A"] });
+    res.json({ success: true, situacoes: Array.isArray(data?.value) && !data.value.includes("A") ? [] : ["A"] });
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao obter situações permitidas." });
   }
@@ -3097,7 +3115,7 @@ app.post("/api/admin/nipponflex/situacoes-permitidas", asyncHandler(requireAdmin
     if (!Array.isArray(situacoes)) {
       return res.status(400).json({ error: "Envie uma lista de situações." });
     }
-    const permitidas = situacoes.map((s) => String(s).toUpperCase()).filter((s) => ["A", "I", "P", "S", "D"].includes(s));
+    const permitidas = situacoes.map((s) => String(s).toUpperCase()).filter((s) => s === "A");
     const client = getSupabaseTrustedClient();
     await client!.from("config").upsert({ key: "disSituacoesPermitidas", value: permitidas });
     await dbService.recordAuditLog(req.user?.code || "Admin", "ATUALIZAR_SITUACOES_DI", `Situações permitidas para login D.I.: ${permitidas.join(", ") || "(nenhuma)"}`, req.user?.supabaseToken);
@@ -3285,7 +3303,7 @@ app.post("/api/storage/upload", uploadRateLimiter, asyncHandler(requireAdmin), u
 // (/api/admin/backup/*download). Anexos do suporte (suporte-anexos/) também são
 // privados (download só pelo painel do atendente). Resposta 404 idêntica à de
 // arquivo inexistente.
-const BACKUP_FAMILY_PREFIXES = ["backups-site/", "backups-banco/", "backup-suporte/", "suporte-anexos/"];
+const BACKUP_FAMILY_PREFIXES = ["backups-site/", "backups-banco/", "backup-suporte/", "suporte-anexos/", "nipponflex/"];
 function isBackupFamilyKey(objectKey: string): boolean {
   return BACKUP_FAMILY_PREFIXES.some((p) => objectKey.startsWith(p));
 }

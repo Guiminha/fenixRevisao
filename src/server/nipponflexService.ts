@@ -4,14 +4,15 @@ import crypto from "node:crypto";
 import https from "node:https";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { recordMetrics, reportSystemError } from './metricsService.js';
+import { safeDISearch } from './security.js';
 
 // ====================================================================
 // Serviço de integração com a API Nipponflex (cadastro de D.I.s).
 //
 // Fluxo (uma vez ao dia às 02:30 Brasília, ou manual pelo botão no admin):
 //  1. Autentica na API (get-token, token MD5 diário).
-//  2. Baixa get-cadastro (timeout 15min + 5 retries: 30/60/120/240/500s).
-//  3. Salva arquivo bruto  -> storage nipponflex/brutos/NF-DIS-<data>.json
+//  2. Consulta get-cadastro com datbas (15min, até 2 retries).
+//  3. Descarta os campos não usados pelo site; não salva o cadastro bruto.
 //  4. Filtra (nome, código, situação) -> storage nipponflex/filtrados/DIS-FENIX-<data>.json
 //  5. Sincroniza com a tabela dis_fenix no Supabase (novos + mudança de situação).
 //  6. Gera relatório do dia -> storage nipponflex/relatorios/RELATORIO-<data>.json
@@ -34,13 +35,16 @@ const nipponflexAgent = new https.Agent({ rejectUnauthorized: false });
 
 export interface NfLogEntry {
   id?: string;
-  ts: string;        // HH:MM:SS (Brasília)
+  ts: string;        // DD/MM/AAAA HH:MM:SS (Brasília)
   nivel: "info" | "ok" | "erro" | "aviso";
   msg: string;
 }
 
 export interface NfRelatorio {
   data: string;
+  modo?: "completa" | "incremental";
+  dataBase?: string | null;
+  removidos?: number;
   inicio: string;
   fim: string;
   duracaoSeg: number;
@@ -57,6 +61,9 @@ export interface NfRelatorio {
 
 export interface NfEstado {
   relatorioVersao?: number;
+  modoSincronizacao?: "completa" | "incremental";
+  dataBaseConsulta?: string | null;
+  removidos?: number;
   status: "ok" | "erro" | "em_andamento";
   ultimaSincronizacao: string | null;
   ultimoArquivoBruto: string | null;
@@ -92,6 +99,7 @@ let estado: NfEstado = {
 let logsAtual: NfLogEntry[] = [];
 let syncInProgress = false;
 let supabase: SupabaseClient | null = null;
+let checkpoint: string | null = null;
 
 function supabaseClient(): SupabaseClient {
   if (supabase) return supabase;
@@ -134,6 +142,7 @@ function numeroDoNome(nome: string): string {
 function requestNipponflex(url: string, opts: { method: string; headers?: Record<string, string>; body?: string; timeoutMs: number }): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
+    let deadline: ReturnType<typeof setTimeout>;
     const req = https.request(
       {
         hostname: u.hostname,
@@ -147,10 +156,13 @@ function requestNipponflex(url: string, opts: { method: string; headers?: Record
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c) => chunks.push(Buffer.from(c)));
-        res.on("end", () => resolve({ status: res.statusCode || 0, text: Buffer.concat(chunks).toString("utf8") }));
+        res.on("end", () => { clearTimeout(deadline); resolve({ status: res.statusCode || 0, text: Buffer.concat(chunks).toString("utf8") }); });
         res.on("error", (e) => reject(e));
+        res.on("aborted", () => reject(new Error("Resposta interrompida pela API Nipponflex")));
       }
     );
+    deadline = setTimeout(() => req.destroy(new Error("timeout")), opts.timeoutMs);
+    req.on("close", () => clearTimeout(deadline));
     req.on("timeout", () => { req.destroy(new Error("timeout")); });
     req.on("error", (e) => reject(e));
     if (opts.body) req.write(opts.body);
@@ -162,13 +174,34 @@ function requestNipponflex(url: string, opts: { method: string; headers?: Record
 // Logs em tempo real
 // ------------------------------------------------------------------
 function addLog(nivel: NfLogEntry["nivel"], msg: string): void {
-  logsAtual.push({ id: crypto.randomUUID(), ts: horaBrasilia(), nivel, msg });
+  const agora = new Date();
+  const ts = agora.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", hour12: false }).replace(",", "");
+  logsAtual.push({ id: crypto.randomUUID(), ts, nivel, msg });
   if (logsAtual.length > MAX_LOGS) logsAtual = logsAtual.slice(-MAX_LOGS);
-  console.log(`[Nipponflex][${horaBrasilia()}] ${msg}`);
+  console.log(`[Nipponflex][${ts}] ${msg}`);
+}
+
+// Registros antigos guardavam apenas a hora. A data do início da rodada permite
+// recuperar o dia sem confundir uma falha recente com a última sync bem-sucedida.
+export function normalizarUltimosNfLogs(logs: NfLogEntry[]): NfLogEntry[] {
+  let inicio = -1;
+  for (let i = 0; i < logs.length; i++) {
+    if (/^Iniciando sincronização com a API Nipponflex \(\d{4}-\d{2}-\d{2}\)/.test(logs[i]?.msg)) inicio = i;
+  }
+  const ultimos = logs.slice(Math.max(0, inicio));
+  const dataInicial = ultimos[0]?.msg.match(/\((\d{4}-\d{2}-\d{2})\)/)?.[1];
+  let dia = dataInicial ? new Date(`${dataInicial}T12:00:00Z`) : null;
+  let horaAnterior = "";
+  return ultimos.map(log => {
+    if (!dia || !/^\d{2}:\d{2}:\d{2}$/.test(log.ts)) return { ...log };
+    if (horaAnterior && log.ts < horaAnterior) dia.setUTCDate(dia.getUTCDate() + 1);
+    horaAnterior = log.ts;
+    return { ...log, ts: `${dia.toLocaleDateString("pt-BR", { timeZone: "UTC" })} ${log.ts}` };
+  });
 }
 
 export function getNfLogs(): NfLogEntry[] {
-  return [...logsAtual];
+  return normalizarUltimosNfLogs(logsAtual);
 }
 
 // ------------------------------------------------------------------
@@ -209,25 +242,40 @@ async function obterToken(rel: NfRelatorio): Promise<string> {
 // ------------------------------------------------------------------
 // Download get-cadastro com timeout longo + retries
 // ------------------------------------------------------------------
-async function baixarCadastro(token: string, rel: NfRelatorio): Promise<string> {
+export function dataBaseIncremental(ultima: string | null): string | null {
+  if (!ultima || !Number.isFinite(Date.parse(ultima))) return null;
+  const iso = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ultima));
+  const dia = new Date(`${iso}T12:00:00Z`);
+  dia.setUTCDate(dia.getUTCDate() - 1);
+  return dia.toLocaleDateString("pt-BR", { timeZone: "UTC" }).replaceAll("/", "-");
+}
+
+async function baixarCadastro(token: string, rel: NfRelatorio, dataBase: string | null): Promise<string> {
   const baseUrl = process.env.NIPPONFLEX_BASE_URL || "";
   const t0 = Date.now();
-  const delays = [30_000, 60_000, 120_000, 240_000, 500_000]; // 5 tentativas
+  const delays = [60_000, 120_000]; // no máximo duas novas tentativas
   let ultimoErro = "";
+  let falhasLongas = 0;
 
   addLog("info", "Baixando dados cadastrais (get-cadastro)... isso pode levar vários minutos.");
 
-  for (let tentativa = 0; tentativa <= 5; tentativa++) {
+  for (let tentativa = 0; tentativa <= 2; tentativa++) {
     const inicioTentativa = Date.now();
-    const rotulo = tentativa === 0 ? "Download" : `Nova tentativa (${tentativa}/5)`;
+    const rotulo = tentativa === 0 ? "Download" : `Nova tentativa (${tentativa}/2)`;
     addLog("info", `${rotulo}: chamando a API Nipponflex...`);
     try {
-      const { status, text } = await requestNipponflex(`${baseUrl}/api/rede/get-cadastro`, {
+      const url = new URL(`${baseUrl}/api/rede/get-cadastro`);
+      if (dataBase) url.searchParams.set("datbas", dataBase);
+      const { status, text } = await requestNipponflex(url.toString(), {
         method: "GET",
         headers: { "co-token": token },
         timeoutMs: 900_000 // 15 minutos
       });
-      if (status !== 200) throw new Error(`HTTP ${status}`);
+      if (status !== 200) {
+        const error = new Error(`HTTP ${status} na API Nipponflex`);
+        Object.assign(error, { status });
+        throw error;
+      }
       if (!text || text.trim().length === 0) throw new Error("Resposta vazia");
       addLog("ok", `Download concluído: ${text.length} bytes recebidos em ${Math.round((Date.now() - t0) / 1000)}s.`);
       rel.etapas.push({ etapa: tentativa === 0 ? "download" : `download (retry ${tentativa})`, ok: true, duracaoSeg: Math.round((Date.now() - t0) / 1000) });
@@ -235,8 +283,14 @@ async function baixarCadastro(token: string, rel: NfRelatorio): Promise<string> 
     } catch (e: any) {
       const ehTimeout = e?.message === "timeout";
       ultimoErro = ehTimeout ? "Timeout ao baixar dados (15 min excedidos)" : e.message;
-      addLog("erro", `${rotulo} falhou: ${ultimoErro}.`);
-      if (tentativa < 5) {
+      const duracao = Math.round((Date.now() - inicioTentativa) / 1000);
+      addLog("erro", `${rotulo} falhou após ${duracao}s: ${ultimoErro}.`);
+      if ((e.status === 500 || ehTimeout) && duracao >= 540) falhasLongas++;
+      if (falhasLongas >= 2 || (e.status >= 400 && e.status < 500 && e.status !== 429)) {
+        addLog("aviso", "Consultas interrompidas para evitar repetir uma falha persistente. A base anterior e a data de referência serão preservadas.");
+        break;
+      }
+      if (tentativa < 2) {
         const delay = delays[tentativa];
         addLog("aviso", `Aguardando ${Math.round(delay / 1000)}s antes da próxima tentativa...`);
         rel.etapas.push({
@@ -283,9 +337,12 @@ function filtrarDados(rawText: string): { codigo: string; nome: string; situacao
   const resultado: { codigo: string; nome: string; situacao: string }[] = [];
   for (const item of dados) {
     const codigo = String(item?.codcli ?? "").trim();
-    if (!codigo) continue;
-    const nome = numeroDoNome(item?.nomtit ?? "");
-    const situacao = String(item?.sitpen ?? "").trim().toUpperCase() || "I";
+    if (!/^\d{4,6}$/.test(codigo)) throw new Error("A API retornou um código D.I. inválido; base anterior preservada.");
+    const nome = numeroDoNome(String(item?.nomtit ?? ""));
+    const situacao = String(item?.sitpen ?? "").trim().toUpperCase();
+    if (!["A", "I", "P", "S", "D"].includes(situacao) || (situacao === "A" && !nome)) {
+      throw new Error("A API retornou nome/situação inválidos; base anterior preservada.");
+    }
     resultado.push({ codigo, nome, situacao });
   }
   return resultado;
@@ -294,51 +351,47 @@ function filtrarDados(rawText: string): { codigo: string; nome: string; situacao
 // ------------------------------------------------------------------
 // Sincronização com o Supabase (tabela dis_fenix)
 // ------------------------------------------------------------------
-async function sincronizarBanco(filtrados: { codigo: string; nome: string; situacao: string }[]): Promise<{ novos: { codigo: string; nome: string; situacao: string }[]; alterados: { codigo: string; nome: string; anterior: string; nova: string }[] }> {
+async function sincronizarBanco(filtrados: { codigo: string; nome: string; situacao: string }[], rel: NfRelatorio): Promise<{ novos: { codigo: string; nome: string; situacao: string }[]; alterados: { codigo: string; nome: string; anterior: string; nova: string }[]; removidos: number }> {
   const client = supabaseClient();
-  const novos: { codigo: string; nome: string; situacao: string }[] = [];
-  const alterados: { codigo: string; nome: string; anterior: string; nova: string }[] = [];
-
-  addLog("info", "Lendo D.I.s já cadastrados no banco (dis_fenix)...");
-  const mapaExistente = new Map<string, string>();
-  // Consultas grandes também sofrem o limite de linhas do PostgREST.
-  // Paginar em ordem estável evita classificar cadastros antigos como novos.
+  const existentes = [] as { codigo: string; nome: string; situacao: string }[];
   for (let offset = 0; ; ) {
-    const { data: existentes, error } = await client.from("dis_fenix")
-      .select("codigo, situacao").order("codigo").range(offset, offset + 499);
+    const { data, error } = await client.from("dis_fenix").select("codigo, nome, situacao").order("codigo").range(offset, offset + 499);
     if (error) throw new Error(`Falha ao ler dis_fenix: ${error.message}`);
-    if (!existentes?.length) break;
-    for (const e of existentes) mapaExistente.set(String(e.codigo), e.situacao);
-    offset += existentes.length;
+    if (!data?.length) break;
+    existentes.push(...data);
+    offset += data.length;
   }
-
-  const linhas = filtrados.map((f) => ({ codigo: f.codigo, nome: f.nome, situacao: f.situacao }));
-
-  for (const l of linhas) {
-    if (!mapaExistente.has(l.codigo)) {
-      // Novo D.I.: guarda objeto completo para o relatório de alterações
-      novos.push({ codigo: l.codigo, nome: l.nome, situacao: l.situacao });
-    } else {
-      const anterior = mapaExistente.get(l.codigo);
-      if (anterior !== l.situacao) {
-        alterados.push({ codigo: l.codigo, nome: l.nome, anterior: anterior || "", nova: l.situacao });
-      }
-    }
-  }
-
-  addLog("info", `Gravando ${linhas.length} D.I.s no banco (em lotes de ${TAMANHO_LOTE_SYNC})...`);
-  for (let i = 0; i < linhas.length; i += TAMANHO_LOTE_SYNC) {
-    const lote = linhas.slice(i, i + TAMANHO_LOTE_SYNC);
+  // Backup completo dos registros usados pelo site antes de qualquer mutação.
+  const backup = `BASE-ANTES-${rel.inicio.replace(/[:.]/g, "-")}.json`;
+  await uploadArquivo("backups", backup, JSON.stringify(existentes));
+  addLog("ok", "Backup da base de acesso salvo no Supabase antes da atualização.");
+  const mapa = new Map(existentes.map(e => [String(e.codigo), e]));
+  const recebidos = new Map(filtrados.map(e => [e.codigo, e]));
+  if (recebidos.size !== filtrados.length) throw new Error("Resposta com códigos duplicados; atualização cancelada.");
+  const ativos = filtrados.filter(e => e.situacao === "A");
+  const novos = ativos.filter(e => !mapa.has(e.codigo) || mapa.get(e.codigo)?.situacao !== "A");
+  const alterados = filtrados.filter(e => mapa.has(e.codigo) && mapa.get(e.codigo)?.situacao !== e.situacao)
+    .map(e => ({ codigo: e.codigo, nome: e.nome, anterior: mapa.get(e.codigo)!.situacao, nova: e.situacao }));
+  const remover = new Set(existentes.filter(e => e.situacao !== "A").map(e => String(e.codigo)));
+  for (const e of filtrados) if (e.situacao !== "A" && mapa.has(e.codigo)) remover.add(e.codigo);
+  // Um cadastro reativado não pode ser removido na limpeza da base legada.
+  for (const e of ativos) remover.delete(e.codigo);
+  addLog("info", `Atualizando ${ativos.length} ativo(s) recebido(s); removendo ${remover.size} registro(s) não ativo(s) da base de acesso.`);
+  for (let i = 0; i < ativos.length; i += TAMANHO_LOTE_SYNC) {
+    const lote = ativos.slice(i, i + TAMANHO_LOTE_SYNC);
     const { error } = await client.from("dis_fenix").upsert(lote, { onConflict: "codigo" });
-    if (error) throw new Error(`Falha no upsert de dis_fenix (lote ${i}): ${error.message}`);
-    const codes = new Set(lote.map(row => row.codigo));
-    await recordMetrics([
-      ...novos.filter(row => codes.has(row.codigo)).map(row => ({ kind: 'di_new' as const, entity_id: row.codigo, detail: { name: row.nome, previous: null, current: row.situacao } })),
-      ...alterados.filter(row => codes.has(row.codigo)).map(row => ({ kind: 'di_status' as const, entity_id: row.codigo, detail: { name: row.nome, previous: row.anterior, current: row.nova } })),
-    ]);
+    if (error) throw new Error(`Falha ao atualizar ativos: ${error.message}`);
   }
-
-  return { novos, alterados };
+  const codigos = [...remover];
+  for (let i = 0; i < codigos.length; i += 200) {
+    const { error } = await client.from("dis_fenix").delete().in("codigo", codigos.slice(i, i + 200));
+    if (error) throw new Error(`Falha ao retirar D.I.s sem acesso: ${error.message}`);
+  }
+  await recordMetrics([
+    ...novos.map(e => ({ kind: "di_new" as const, entity_id: e.codigo, detail: { name: e.nome, previous: null, current: e.situacao } })),
+    ...alterados.map(e => ({ kind: "di_status" as const, entity_id: e.codigo, detail: { name: e.nome, previous: e.anterior, current: e.nova } })),
+  ]);
+  return { novos, alterados, removidos: remover.size };
 }
 
 // ------------------------------------------------------------------
@@ -359,8 +412,11 @@ export async function carregarEstadoInicial(): Promise<void> {
     const client = supabaseClient();
     const { data } = await client.from("config").select("value").eq("key", "nipponflexEstado").maybeSingle();
     if (data?.value) estado = { ...estado, ...data.value };
+    const { data: cursor } = await client.from("config").select("value").eq("key", "nipponflexCheckpoint").maybeSingle();
+    if (typeof cursor?.value?.inicio === "string") checkpoint = cursor.value.inicio;
+    else checkpoint = estado.ultimaSincronizacao;
     const { data: logs } = await client.from("config").select("value").eq("key", "nipponflexLogs").maybeSingle();
-    if (Array.isArray(logs?.value)) logsAtual = logs.value;
+    if (Array.isArray(logs?.value)) logsAtual = normalizarUltimosNfLogs(logs.value);
   } catch {
     // usa o padrão em memória
   }
@@ -447,22 +503,21 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     const token = await obterToken(rel);
     await persistirEstado();
 
-    // 2. Download
-    const rawText = await baixarCadastro(token, rel);
-    const baixados = rawText.length;
+    // A referência só avança quando toda a rodada conclui. Nunca filtrar apenas
+    // ativos na API: as saídas são necessárias para revogar acessos existentes.
+    const dataBase = dataBaseIncremental(checkpoint);
+    rel.modo = dataBase ? "incremental" : "completa";
+    rel.dataBase = dataBase;
+    estado.modoSincronizacao = rel.modo;
+    estado.dataBaseConsulta = dataBase;
+    addLog("info", dataBase ? `Consulta incremental: datbas=${dataBase}. Buscando novos cadastros e mudanças, inclusive situações não ativas.` : "Carga inicial completa: ainda não existe uma referência de sincronização.");
+    const rawText = await baixarCadastro(token, rel, dataBase);
+    const baixados = Buffer.byteLength(rawText, "utf8");
     rel.baixados = baixados;
     estado.baixados = baixados;
     await persistirEstado();
 
-    // 3. Arquivo bruto no storage
-    const nomeBruto = `NF-DIS-${rel.data}.json`;
-    addLog("info", "Salvando arquivo bruto no Supabase Storage...");
-    await uploadArquivo("brutos", nomeBruto, rawText);
-    rel.etapas.push({ etapa: "arquivo_bruto", ok: true, duracaoSeg: 0, detalhe: nomeBruto });
-    estado.ultimoArquivoBruto = nomeBruto;
-    addLog("ok", `Arquivo bruto salvo: ${nomeBruto} (${(baixados / 1024).toFixed(1)} KB).`);
-    await persistirEstado();
-
+    // Os campos não usados pelo site não são copiados para o Storage.
     // 4. Filtrar
     addLog("info", "Filtrando dados (nome, código, situação)...");
     const filtrados = filtrarDados(rawText);
@@ -482,7 +537,9 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
 
     // 6. Sync banco
     addLog("info", "Sincronizando com o banco de dados (dis_fenix)...");
-    const { novos, alterados } = await sincronizarBanco(filtrados);
+    const { novos, alterados, removidos } = await sincronizarBanco(filtrados, rel);
+    rel.removidos = removidos;
+    estado.removidos = removidos;
     rel.novosCadastrados = novos.length;
     rel.novosDetalhes = novos;
     rel.situacoesAlteradas = alterados;
@@ -490,7 +547,6 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     estado.novosDetalhes = novos;
     estado.situacoesAlteradas = alterados;
     estado.relatorioVersao = 2;
-    estado.ultimaSincronizacao = agoraISO();
     addLog("ok", `${novos.length} novo(s) D.I.(s) cadastrado(s).`);
     if (alterados.length > 0) {
       addLog("info", `${alterados.length} D.I.(s) mudaram de situação.`);
@@ -507,6 +563,9 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     estado.ultimoRelatorio = nomeRelatorio;
     addLog("ok", `Relatório salvo: ${nomeRelatorio}.`);
 
+    const { error: checkpointError } = await supabaseClient().from("config").upsert({ key: "nipponflexCheckpoint", value: { inicio: rel.inicio, modo: rel.modo } });
+    if (checkpointError) throw new Error(`Falha ao salvar referência: ${checkpointError.message}`);
+    checkpoint = rel.inicio;
     // Estado final
     estado.status = "ok";
     estado.ultimaSincronizacao = agoraISO();
@@ -522,7 +581,7 @@ export async function executarSincronizacao(): Promise<{ success: boolean; relat
     rel.status = "erro";
     rel.erros.push(e.message || String(e));
     rel.fim = agoraISO();
-    rel.duracaoSeg = 0;
+    rel.duracaoSeg = Math.round((Date.now() - Date.parse(rel.inicio)) / 1000);
 
     estado.status = "erro";
     estado.erro = e.message || String(e);
@@ -590,8 +649,10 @@ export async function obterDisPaginado(pagina: number, busca: string, situacao: 
   const to = from + porPagina - 1;
 
   let query = client.from("dis_fenix").select("codigo, nome, situacao, atualizado_em", { count: "exact" });
-  if (busca) {
-    query = query.or(`nome.ilike.%${busca}%,codigo.ilike.%${busca}%`);
+  const termo = safeDISearch(busca);
+  if (busca.trim() && !termo) return { itens: [], total: 0, pagina, totalPaginas: 0 };
+  if (termo) {
+    query = query.or(`nome.ilike.%${termo}%,codigo.ilike.%${termo}%`);
   }
   if (situacao && situacao !== "todos") {
     query = query.eq("situacao", situacao);

@@ -33,7 +33,7 @@ app.get('*', (_req, res) => res.sendFile(path.resolve('dist/index.html')));
 const server = app.listen(0, '127.0.0.1');
 await new Promise<void>(resolve => server.once('listening', resolve));
 const base = `http://127.0.0.1:${(server.address() as any).port}`;
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext();
   const errors: string[] = [];

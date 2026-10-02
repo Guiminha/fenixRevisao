@@ -33,7 +33,7 @@ async function readRows(table: string, columns: string, filter?: [string, string
   throw new Error("Limite de metadados excedido.");
 }
 export async function mediaPolicy(key: string): Promise<MediaPolicy> {
-  if (["backups-site/", "backups-banco/", "backup-suporte/", "suporte-anexos/"].some(p => key.startsWith(p))) return "blocked";
+  if (["backups-site/", "backups-banco/", "backup-suporte/", "suporte-anexos/", "nipponflex/"].some(p => key.startsWith(p))) return "blocked";
   if (key.startsWith("cursos/videos/")) return "member";
   if (key.startsWith("fenix_social/")) {
     const posts = await rows("fenix_posts", "id,media_url,media_urls", ["status", "aprovado"]);

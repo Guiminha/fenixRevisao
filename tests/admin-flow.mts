@@ -89,7 +89,7 @@ try {
   assert.equal((await api('/api/content/course-access/course-1',diCookie,{})).status,204);
   report = await (await api('/api/admin/metrics',adminCookie,undefined,true)).json();
   assert.ok(report.collection.failedWrites>0); assert.equal(report.totals.course,1); failMetrics=false;
-  browser=await chromium.launch({ channel:'msedge',headless:true });
+  browser=await chromium.launch({ headless:true });
   const context=await browser.newContext(); const page=await context.newPage(); const pageErrors:string[]=[];
   page.on('pageerror',(e:any)=>pageErrors.push(e.message));
   const emptyContent={ cursos:[],materiais:[],banners:[],novidades:[],tecnologias:[],fenixPosts:[],categoriasMateriais:[],leaderBio:{} };

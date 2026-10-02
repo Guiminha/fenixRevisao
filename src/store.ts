@@ -82,8 +82,8 @@ interface PlatformState {
 
   // Auth Actions
   fetchUser: () => Promise<boolean>;
-  login: (credentials: { code?: string; email?: string; password?: string }) => Promise<{ success: boolean; error?: string }>;
-  logout: () => Promise<void>;
+  login: (credentials: { code?: string; email?: string; password?: string; _hp?: string }) => Promise<{ success: boolean; error?: string; retryAfterSeconds?: number }>;
+  logout: (localOnly?: boolean) => Promise<void>;
   moderationToken: string | null;
   setModerationToken: (token: string | null) => void;
 
@@ -285,10 +285,10 @@ export const useStore = create<PlatformState>((set, get) => {
           }
         }
 
-        set({ user: null, loggedIn: false, token: null, authLoading: false });
+        set(get().loggedIn ? { authLoading: false } : { user: null, loggedIn: false, token: null, authLoading: false });
         return false;
       } catch (e) {
-        set({ user: null, loggedIn: false, authLoading: false });
+        set(get().loggedIn ? { authLoading: false } : { user: null, loggedIn: false, authLoading: false });
         return false;
       }
     },
@@ -316,7 +316,7 @@ export const useStore = create<PlatformState>((set, get) => {
             }
           } else if (contentType.includes("application/json")) {
             const data = await res.json();
-            return { success: false, error: data.error || "Erro de login desconhecido." };
+            return { success: false, error: data.error || "Erro de login desconhecido.", retryAfterSeconds: data.retryAfterSeconds };
           } else {
             marcarServidorIndisponivel();
           }
@@ -333,8 +333,8 @@ export const useStore = create<PlatformState>((set, get) => {
       }
     },
 
-    logout: async () => {
-      if (servidorDisponivel()) {
+    logout: async (localOnly = false) => {
+      if (!localOnly && servidorDisponivel()) {
         try {
           const headers: HeadersInit = {};
           const token = get().token;
@@ -866,6 +866,17 @@ export const useStore = create<PlatformState>((set, get) => {
         const token = get().token;
         if (token) headers["Authorization"] = `Bearer ${token}`;
         const res = await fetch("/api/admin/nipponflex/status", { headers, signal: controller.signal, cache: 'no-store' });
+        if (res.status === 401) {
+          const check = await fetch("/api/auth/me", { signal: controller.signal, cache: 'no-store' });
+          if (!check.ok) return { success: false, error: "Não foi possível confirmar a sessão. Tente novamente." };
+          const current = await check.json();
+          if (!current.loggedIn) {
+            await get().logout(true);
+            return { success: false, error: "Sessão expirada. Faça login novamente." };
+          }
+          set({ user: current.user, loggedIn: true });
+          return { success: false, error: "Sessão confirmada. Atualizando o status na próxima consulta." };
+        }
         const result = await res.json();
         if (res.ok && result.success) {
           set({ nfStatus: { estado: result.estado, logs: result.logs || [], metricas: result.metricas } });

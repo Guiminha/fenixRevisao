@@ -14,7 +14,11 @@ export function startSessionPresence(onExpired: () => void): () => void {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tabId }), signal: AbortSignal.timeout(10_000),
       });
-      if (response.status === 401 && !stopped && !leaving) onExpired();
+      if (response.status === 401 && !stopped && !leaving) {
+        // Uma resposta antiga de outra aba não deve encerrar um login mais recente.
+        const check = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+        if (check.ok && !(await check.json()).loggedIn && !stopped && !leaving) onExpired();
+      }
     } catch { /* Temporary network failures are covered by the server grace period. */ }
     finally { pending = false; }
   };

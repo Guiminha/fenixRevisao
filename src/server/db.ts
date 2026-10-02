@@ -1670,7 +1670,7 @@ if (!this.data.paginaElite) this.data.paginaElite = [];
     const { data: cfg, error: cfgError } = await client.from("config").select("value").eq("key", "disSituacoesPermitidas").maybeSingle();
     if (cfgError) throw cfgError;
     const allowed: string[] = Array.isArray(cfg?.value) ? cfg.value : ["A"];
-    if (!allowed.includes(String(di.situacao || "I").toUpperCase())) return denied;
+    if (String(di.situacao || "I").toUpperCase() !== "A" || !allowed.includes("A")) return denied;
     return { valid: true, role: "user", userCode: di.codigo, name: di.nome || di.codigo };
   }
 

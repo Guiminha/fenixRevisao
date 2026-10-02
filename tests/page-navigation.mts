@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
 const base = 'http://localhost:3001';
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await context.newPage();
@@ -30,7 +30,7 @@ try {
   await page.goForward();
   await page.waitForURL(base + '/tecnologias');
   await page.waitForFunction(() => document.getElementById('nav-tecnologias')?.className.includes('bg-[#d12a62]/10'));
-  for (const path of ['/escola-fenix', '/materiais', '/suporte']) {
+  for (const path of ['/escola-fenix', '/suporte']) {
     const response = await page.goto(base + path);
     assert.equal(response?.status(), 200);
     if (path === '/suporte') await page.getByRole('button', { name: 'Entrar com código D.I.' }).click();
@@ -41,7 +41,8 @@ try {
     await page.locator('#login-dialog-container').waitFor();
   }
   await page.goto(base + '/?view=conteudos&material=teste-link');
-  await page.locator('#login-dialog-container').waitFor();
+  await page.getByRole('heading', { name: 'Materiais de Apoio' }).waitFor();
+  assert.equal(await page.locator('#login-dialog-container').count(), 0);
   assert.equal(new URL(page.url()).pathname, '/materiais');
   assert.equal(new URL(page.url()).searchParams.get('material'), 'teste-link');
   // Simulação isolada de sessão: nenhum login ou registro real é criado.

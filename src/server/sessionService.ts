@@ -118,15 +118,20 @@ export class SessionService {
   }
   private async current(session: Session): Promise<Identity | null> {
     if (this.expired(session)) {
+      console.warn(`[Sessão] Expirada: ${session.presenceUntil <= Date.now() ? 'sem comunicação' : 'prazo máximo'}. Perfil: ${session.identity.role}.`);
       this.remove(session.id); return null;
     }
     const current = await this.lookup(session.identity.code);
     if (!current || current.role !== session.identity.role || current.version !== session.identity.version) {
+      console.warn(`[Sessão] Revogada: ${!current ? 'conta sem acesso' : current.role !== session.identity.role ? 'permissão alterada' : 'versão da conta alterada'}. Perfil: ${session.identity.role}.`);
       this.revokeAccount(session.identity.code); return null;
     }
     // A concurrent password change/logout must not resurrect an in-flight session.
     if (this.sessions.get(session.id) !== session || this.expired(session)) return null;
     session.identity = current;
+    // Consultas autenticadas são comunicação válida, inclusive o polling do admin.
+    // Não reativa sessões expiradas nem altera a tolerância ao fechar a última aba.
+    session.presenceUntil = Math.max(session.presenceUntil, Date.now() + PRESENCE_TIMEOUT_MS);
     return current;
   }
   async authenticate(access: unknown): Promise<Identity | null> {

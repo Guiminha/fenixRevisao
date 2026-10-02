@@ -14,7 +14,18 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [failedAttempts, setFailedAttempts] = useState(0);
+  const [honeypot, setHoneypot] = useState('');
+  const [blockedUntil, setBlockedUntil] = useState(0);
+  const [waitSeconds, setWaitSeconds] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const update = () => setWaitSeconds(Math.max(0, Math.ceil((blockedUntil - Date.now()) / 1000)));
+    update();
+    if (!blockedUntil) return;
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [blockedUntil]);
 
   useEffect(() => {
     // Autofocus on mount
@@ -33,6 +44,7 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading || waitSeconds > 0) return;
     if (code.length < 4 || code.length > 6) {
       setError("O código de acesso deve ter entre 4 e 6 dígitos.");
       return;
@@ -41,7 +53,7 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
     setLoading(true);
     setError(null);
 
-    const result = await login({ code });
+    const result = await login({ code, _hp: honeypot });
     setLoading(false);
 
     if (result.success) {
@@ -50,6 +62,7 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
     } else {
       setFailedAttempts((prev) => prev + 1);
       setError(result.error || "Ocorreu um erro ao validar seu código.");
+      if (result.retryAfterSeconds) setBlockedUntil(Date.now() + result.retryAfterSeconds * 1000);
     }
   };
 
@@ -57,7 +70,7 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
     setCode(demoCode);
     setError(null);
     setLoading(true);
-    const result = await login({ code: demoCode });
+    const result = await login({ code: demoCode, _hp: honeypot });
     setLoading(false);
     if (result.success) {
       setFailedAttempts(0);
@@ -111,6 +124,10 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
 
         {/* Login Form */}
         <form onSubmit={handleSubmit} className="space-y-5">
+          <div aria-hidden="true" className="absolute -left-[10000px] h-px w-px overflow-hidden">
+            <label htmlFor="di-login-extra">Deixe este campo vazio</label>
+            <input id="di-login-extra" type="text" name="_hp" value={honeypot} onChange={e => setHoneypot(e.target.value)} tabIndex={-1} autoComplete="off" />
+          </div>
           <div className="space-y-2">
             <label className="text-[13px] font-bold text-[#94a3b8] uppercase tracking-wider block text-center">
               Insira o codigo D. I. para acessar
@@ -149,10 +166,10 @@ export default function LoginModal({ onSuccess, onClose }: LoginModalProps) {
           <button
             id="login-submit-btn"
             type="submit"
-            disabled={loading}
+            disabled={loading || waitSeconds > 0}
             className="w-full btn-gold-metallic py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 cursor-pointer shadow-lg"
           >
-            {loading ? (
+            {waitSeconds > 0 ? `Aguarde ${Math.ceil(waitSeconds / 60)} minuto(s)` : loading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-[#07090e]" />
                 Verificando...

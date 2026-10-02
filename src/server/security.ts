@@ -1,5 +1,11 @@
 import type { RequestHandler } from "express";
 
+// Search supports names (including accents) and numeric DI codes, but never
+// raw PostgREST operators, quotes, wildcards, commas or parentheses.
+export function safeDISearch(value: string): string {
+  return value.normalize('NFC').slice(0, 120).replace(/[^\p{L}\p{M}\p{N}\s-]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
 // Express 4 does not forward rejected promises to error middleware.
 export function asyncHandler(handler: (...args: any[]) => any): RequestHandler {
   return (req, res, next) => {

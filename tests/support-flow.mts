@@ -54,7 +54,7 @@ app.use(express.static(process.env.FENIX_TEST_DIST || 'dist'));
 const server = app.listen(0, '127.0.0.1');
 await new Promise<void>(resolve => server.once('listening', resolve));
 const base = `http://127.0.0.1:${(server.address() as any).port}`;
-const browser = await chromium.launch({ channel: 'msedge', headless: true });
+const browser = await chromium.launch({ headless: true });
 const api = async (route: string, body?: unknown, cookie?: string) => originalFetch(base + route, {
   method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
   body: body === undefined ? undefined : JSON.stringify(body)
